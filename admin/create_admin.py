@@ -1,150 +1,72 @@
-# import sqlite3
-# from werkzeug.security import generate_password_hash
-
-# # ===== CHANGE THESE VALUES =====
-# name = 'Yash Kabure'
-# email = 'admin@apexhr.com'
-# password = 'Admin@123'   # You can change this
-# # ===============================
-
-# conn = sqlite3.connect('data/employee.db')
-# cursor = conn.cursor()
-
-# # Generate secure hash
-# password_hash = generate_password_hash(password)
-
-# try:
-#     cursor.execute('''
-#     INSERT INTO admins (name, email, password_hash)
-#     VALUES (?, ?, ?)
-#     ''', (name, email, password_hash))
-
-#     conn.commit()
-#     print(' Admin account created successfully!')
-#     print(f' Email: {email}')
-#     print(f' Password: {password}')
-
-# except sqlite3.IntegrityError:
-#     print('Admin with this email already exists.')
-
-# finally:
-#     conn.close()
-
-
-
-
-
-# # Name: Yash Kabure
-# # Email: admin@apexhr.com
-# # Hash starts with: scrypt:32768:8:1$vJ0
-# Password: Admin@123
-
-# import sqlite3
-# from werkzeug.security import generate_password_hash
-
-# # CHANGE THESE
-# new_email = 'yash@apexhr.com'
-# new_password = 'Yash@2026'
-
-# conn = sqlite3.connect('hrms.db')
-# cursor = conn.cursor()
-
-# new_hash = generate_password_hash(new_password)
-
-# cursor.execute('''
-# UPDATE admins
-# SET email = ?, password_hash = ?
-# WHERE id = 1
-# ''', (new_email, new_hash))
-
-# conn.commit()
-# conn.close()
-
-# print('✅ Admin credentials updated!')
-# print('Email:', new_email)
-# print('Password:', new_password)
-
-
-# import sqlite3
-# from werkzeug.security import generate_password_hash, check_password_hash
-
-# EMAIL = 'admin@apexhr.com'
-# NEW_PASSWORD = 'Yash@2005'
-
-# conn = sqlite3.connect('data/employee.db')
-# cursor = conn.cursor()
-
-# # Generate new hash
-# new_hash = generate_password_hash(NEW_PASSWORD)
-
-# # Update password
-# cursor.execute(
-#     '''
-#     UPDATE admins
-#     SET password_hash = ?
-#     WHERE email = ?
-#     ''',
-#     (new_hash, EMAIL)
-# )
-
-# conn.commit()
-
-# print('Rows updated:', cursor.rowcount)
-
-# # Verify immediately from database
-# cursor.execute(
-#     'SELECT password_hash FROM admins WHERE email = ?',
-#     (EMAIL,)
-# )
-
-# row = cursor.fetchone()
-
-# if row:
-#     stored_hash = row[0]
-
-#     print('Hash starts with:', stored_hash[:30])
-
-#     # CRITICAL TEST
-#     result = check_password_hash(stored_hash, NEW_PASSWORD)
-
-#     print('Password verification result:', result)
-
-#     if result:
-#         print('✅ Password reset and verification successful!')
-#     else:
-#         print('❌ Verification failed!')
-# else:
-#     print('❌ Admin not found.')
-
-# conn.close()
-
 import sqlite3
 from pathlib import Path
 from werkzeug.security import generate_password_hash
 
+# =====================================================
+# DATABASE PATH
+# =====================================================
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / 'data' / 'employee.db'
 
-EMAIL = 'admin@apexhr.com'
-NEW_PASSWORD = 'Yash@2005'
+# Ensure data directory exists
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+# =====================================================
+# CONNECT
+# =====================================================
 conn = sqlite3.connect(DB_PATH)
 cursor = conn.cursor()
 
-new_hash = generate_password_hash(NEW_PASSWORD)
+try:
+    # =====================================================
+    # CREATE ADMINS TABLE
+    # =====================================================
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS admins (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT DEFAULT 'HR Manager',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
 
-cursor.execute(
-    '''
+    # =====================================================
+    # CREATE / UPDATE ADMIN USER
+    # =====================================================
+    NAME = 'Yash Kabure'
+    EMAIL = 'admin@apexhr.com'
+    PASSWORD = 'Yash@2005'
+    password_hash = generate_password_hash(PASSWORD)
+
+    # Insert admin if not exists
+    cursor.execute('''
+    INSERT OR IGNORE INTO admins (name, email, password_hash, role)
+    VALUES (?, ?, ?, ?)
+    ''', (
+        NAME,
+        EMAIL,
+        password_hash,
+        'HR Manager'
+    ))
+
+    # Always update password to latest value
+    cursor.execute('''
     UPDATE admins
     SET password_hash = ?
     WHERE email = ?
-    ''',
-    (new_hash, EMAIL)
-)
+    ''', (
+        password_hash,
+        EMAIL
+    ))
 
-conn.commit()
+    conn.commit()
+    
+    print('✅ Admin table ensured')
+    print('✅ Admin account ensured')
+    print('Email:', EMAIL)
+    print('Password:', PASSWORD)
 
-print('Rows updated:', cursor.rowcount)
-print('✅ Password reset successful!')
-
-conn.close()
+finally:
+    conn.close()

@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Environment
+.env
+
+# Logs
+logs/
+*.log
+
+# Vector Database (rebuilt during deployment)
+chroma_db/
+
+# Database
+data/*.db
+
+# Ignore generated salary slips only
+uploads/salary_slips/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

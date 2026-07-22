@@ -1,0 +1,288 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="container-fluid">
+
+    <h2 class="fw-bold mb-4">
+        Salary Slip Management
+    </h2>
+
+    <!-- Upload Card -->
+
+    <div class="card dashboard-panel mb-4">
+
+        <div class="card-header panel-header">
+
+            <i class="bi bi-cloud-upload-fill me-2"></i>
+
+            Upload Salary Slip
+
+        </div>
+
+        <div class="card-body">
+
+            <form
+                method="POST"
+                enctype="multipart/form-data">
+
+                <div class="row g-4">
+
+                    <div class="col-lg-3">
+
+                        <label class="form-label fw-semibold">
+
+                            Employee
+
+                        </label>
+
+                        <select
+                            name="employee_id"
+                            class="form-select"
+                            required>
+
+                            {% for employee in employees %}
+
+                            <option value="{{ employee[0] }}">
+
+                                {{ employee[1] }} ({{ employee[0] }})
+
+                            </option>
+
+                            {% endfor %}
+
+                        </select>
+
+                    </div>
+
+                    <div class="col-lg-2">
+
+                        <label class="form-label fw-semibold">
+
+                            Month
+
+                        </label>
+
+                        <select
+                            name="month"
+                            class="form-select"
+                            required>
+
+                            <option>January</option>
+                            <option>February</option>
+                            <option>March</option>
+                            <option>April</option>
+                            <option>May</option>
+                            <option>June</option>
+                            <option>July</option>
+                            <option>August</option>
+                            <option>September</option>
+                            <option>October</option>
+                            <option>November</option>
+                            <option>December</option>
+
+                        </select>
+
+                    </div>
+
+                    <div class="col-lg-2">
+
+                        <label class="form-label fw-semibold">
+
+                            Year
+
+                        </label>
+
+                        <input
+                            type="number"
+                            name="year"
+                            class="form-control"
+                            value="2026"
+                            required>
+
+                    </div>
+
+                    <div class="col-lg-3">
+
+                        <label class="form-label fw-semibold">
+
+                            Salary Slip (PDF)
+
+                        </label>
+
+                        <input
+                            type="file"
+                            name="salary_pdf"
+                            class="form-control"
+                            accept=".pdf"
+                            required>
+
+                    </div>
+
+                    <div class="col-lg-2 d-flex align-items-end">
+
+                        <button
+                            class="btn btn-primary w-100">
+
+                            <i class="bi bi-upload me-2"></i>
+
+                            Upload
+
+                        </button>
+
+                    </div>
+
+                </div>
+
+            </form>
+
+        </div>
+
+    </div>
+
+    <!-- Uploaded Salary Slips -->
+
+    <div class="card dashboard-panel">
+
+        <div class="card-header panel-header">
+
+            <i class="bi bi-file-earmark-text-fill me-2"></i>
+
+            Uploaded Salary Slips
+
+        </div>
+
+        <div class="card-body">
+
+            {% if salary_slips %}
+
+            <div class="row g-4">
+
+                {% for slip in salary_slips %}
+
+                <div class="col-lg-6">
+
+                    <div class="card border shadow-sm p-3">
+
+                        <div class="d-flex align-items-center">
+
+                            <div class="policy-icon">
+
+                                <i class="bi bi-file-earmark-pdf-fill text-danger fs-1"></i>
+
+                            </div>
+
+                            <div class="ms-3">
+
+                                <h5 class="mb-1">
+
+                                    {{ slip.employee_name }}
+
+                                </h5>
+
+                                <small class="text-muted">
+
+                                    {{ slip.month }} {{ slip.year }}
+
+                                </small>
+
+                            </div>
+
+                        </div>
+
+                        <hr>
+
+                        <div class="d-flex justify-content-end">
+<div class="d-flex justify-content-end"></div>
+
+    <div class="dropdown">
+
+        <button
+            class="btn btn-primary btn-sm dropdown-toggle"
+            type="button"
+            data-bs-toggle="dropdown">
+
+            <i class="bi bi-gear-fill me-1"></i>
+
+            Operate
+
+        </button>
+
+        <ul class="dropdown-menu dropdown-menu-end">
+
+            <li>
+
+                <a
+                    class="dropdown-item"
+                    href="{{ url_for('admin.view_salary_route', id=slip.id) }}"
+                    target="_blank">
+
+                    <i class="bi bi-eye-fill text-primary me-2"></i>
+
+                    View
+
+                </a>
+
+            </li>
+
+            <li><hr class="dropdown-divider"></li>
+
+            <li>
+
+                <a
+                    class="dropdown-item text-danger"
+                    href="{{ url_for('admin.delete_salary_route', id=slip.id) }}"
+                    onclick="return confirm('Delete this salary slip?')">
+
+                    <i class="bi bi-trash-fill me-2"></i>
+
+                    Delete
+
+                </a>
+
+            </li>
+
+        </ul>
+
+    </div>
+
+</div>
+
+                    </div>
+
+                </div>
+
+                {% endfor %}
+
+            </div>
+
+            {% else %}
+
+            <div class="text-center py-5">
+
+                <i class="bi bi-folder2-open text-secondary"
+                   style="font-size:60px;"></i>
+
+                <h4 class="mt-3">
+
+                    No Salary Slips Uploaded
+
+                </h4>
+
+                <p class="text-muted">
+
+                    Upload the first salary slip above.
+
+                </p>
+
+            </div>
+
+            {% endif %}
+
+        </div>
+
+    </div>
+
+</div>
+
+{% endblock %}

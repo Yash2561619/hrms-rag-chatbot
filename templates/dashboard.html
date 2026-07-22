@@ -1,0 +1,413 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+
+
+<!-- Statistics Cards -->
+
+<h2 class="fw-bold mb-4">HR Dashboard</h2>
+
+<div class="row row-cols-1 row-cols-md-2 row-cols-xl-4 g-4 mb-4">
+
+    <div class="col">
+        <div class="dashboard-card">
+            <div class="card-icon bg-primary">
+                <i class="bi bi-people-fill"></i>
+            </div>
+
+            <div class="flex-grow-1">
+                <h6>Total Employees</h6>
+                <h2>{{ stats.employees }}</h2>
+               
+            </div>
+        </div>
+    </div>
+
+    <div class="col">
+        <div class="dashboard-card">
+            <div class="card-icon bg-warning">
+                <i class="bi bi-calendar-check-fill"></i>
+            </div>
+
+            <div class="flex-grow-1">
+                <h6>Pending Leaves</h6>
+                <h2>{{ stats.pending }}</h2>
+             
+            </div>
+        </div>
+    </div>
+
+    <div class="col">
+        <div class="dashboard-card">
+            <div class="card-icon bg-success">
+                <i class="bi bi-file-earmark-pdf-fill"></i>
+            </div>
+
+            <div class="flex-grow-1">
+                <h6>HR Policies</h6>
+                <h2>{{ stats.policies }}</h2>
+              
+            </div>
+        </div>
+    </div>
+
+    <div class="col">
+        <div class="dashboard-card">
+            <div class="card-icon bg-danger">
+                <i class="bi bi-wallet-fill"></i>
+            </div>
+
+            <div class="flex-grow-1">
+                <h6>Salary Slips</h6>
+                <h2>{{ stats.salary }}</h2>
+               
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Charts -->
+
+<div class="row g-4 mb-4">
+
+    <div class="col-xl-6">
+
+        <div class="card dashboard-panel h-100">
+
+            <div class="card-header panel-header">
+
+                <i class="bi bi-pie-chart-fill me-2"></i>
+
+                Leave Status
+
+            </div>
+
+            <div class="card-body">
+
+                <div class="chart-container">
+
+                    <canvas id="leaveChart"></canvas>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="col-xl-6">
+
+        <div class="card dashboard-panel h-100">
+
+            <div class="card-header panel-header">
+
+                <i class="bi bi-bar-chart-fill me-2"></i>
+
+                Employees by Department
+
+            </div>
+
+            <div class="card-body">
+
+                <div class="chart-container">
+
+                    <canvas id="departmentChart"></canvas>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+    <!-- Department Chart -->
+
+    
+
+<!-- Monthly Leave Chart -->
+
+<div class="row mb-4">
+
+    <div class="col-12">
+
+        <div class="card dashboard-panel">
+
+            <div class="card-header panel-header">
+
+                <i class="bi bi-graph-up-arrow me-2"></i>
+
+                Monthly Leave Requests
+
+            </div>
+
+            <div class="card-body">
+
+                <div class="chart-container-large">
+
+                    <canvas id="monthlyChart"></canvas>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+<!-- Recent Activity -->
+
+<div class="row">
+
+    <div class="col-12">
+
+        <div class="card dashboard-panel">
+
+            <div class="card-header panel-header">
+
+                <i class="bi bi-clock-history me-2"></i>
+
+                Recent Activity
+
+            </div>
+
+            <div class="card-body">
+
+                {% if activities %}
+
+                <ul class="list-group list-group-flush">
+
+                    {% for activity in activities %}
+
+                    <li class="list-group-item d-flex justify-content-between">
+
+                        <span>
+
+                            <i class="bi bi-check-circle-fill text-success me-2"></i>
+
+                            {{ activity[0] }}
+
+                        </span>
+
+                        <small>{{ activity[1] }}</small>
+
+                    </li>
+
+                    {% endfor %}
+
+                </ul>
+
+                {% else %}
+
+                <p class="text-muted mb-0">
+
+                    No recent activities.
+
+                </p>
+
+                {% endif %}
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+
+<script>
+
+const leaveStatus = {{ leave_status | tojson }};
+
+new Chart(document.getElementById("leaveChart"), {
+
+    type: "pie",
+
+    data: {
+
+        labels: ["Pending","Approved","Rejected"],
+
+        datasets: [{
+
+            data: [
+
+                leaveStatus.Pending,
+
+                leaveStatus.Approved,
+
+                leaveStatus.Rejected
+
+            ],
+
+            hoverOffset:15,
+
+            backgroundColor: [
+
+                "#ffc107",
+
+                "#198754",
+
+                "#dc3545"
+
+            ]
+
+        }]
+
+    },
+
+    options: {
+
+        responsive:true,
+
+        maintainAspectRatio:false,
+
+        plugins:{
+
+            legend:{
+
+                position:"bottom"
+
+            }
+
+        }
+
+    }
+
+});
+
+const monthly = {{ monthly_leave | tojson }};
+
+new Chart(document.getElementById("monthlyChart"),{
+
+    type:"line",
+
+    data:{
+
+        labels:monthly.labels,
+
+        datasets:[{
+
+            label:"Leave Requests",
+
+            data:monthly.values,
+
+            borderColor:"#0d6efd",
+
+            backgroundColor:"rgba(13,110,253,.15)",
+
+            fill:true,
+
+            tension:.4
+
+        }]
+
+    },
+
+    options:{
+
+        responsive:true,
+
+        maintainAspectRatio:false,
+
+        plugins:{
+
+            legend:{
+
+                display:true
+
+            }
+
+        },
+
+        scales:{
+
+            y:{
+
+                beginAtZero:true
+
+            }
+
+        }
+
+    }
+
+});
+
+const departmentData = {{ department_data | tojson }};
+
+new Chart(document.getElementById("departmentChart"),{
+
+    type:"bar",
+
+    data:{
+
+        labels:departmentData.labels,
+
+        datasets:[{
+
+            label:"Employees",
+
+            data:departmentData.values,
+
+            borderRadius:8,
+
+            backgroundColor:[
+
+                "#0d6efd",
+
+                "#198754",
+
+                "#ffc107",
+
+                "#dc3545",
+
+                "#6f42c1",
+
+                "#fd7e14"
+
+            ]
+
+        }]
+
+    },
+
+    options:{
+
+        responsive:true,
+
+        maintainAspectRatio:false,
+
+        scales:{
+
+            y:{
+
+                beginAtZero:true,
+
+                ticks:{
+
+                    precision:0
+
+                }
+
+            }
+
+        }
+
+    }
+
+});
+
+</script>
+
+{% endblock %}

@@ -1,0 +1,271 @@
+HR POLICY DOCUMENT - Next AI Technologies
+
+===============================================================================
+TABLE OF CONTENTS
+===============================================================================
+
+1. Leave Policy
+2. Salary and Benefits
+3. Health Insurance
+4. IT Security Policy
+5. Remote Work Policy
+6. Code of Conduct
+7. Performance Management
+
+===============================================================================
+1. LEAVE POLICY
+===============================================================================
+
+1.1 Types of Leave
+
+Employees of Next AI Technologies are entitled to the following leave:
+
+1.1.1 Casual Leave
+- Entitlement: 12 days per calendar year
+- Application: Must apply at least 2 days in advance
+- Carry-forward: Unused casual leave cannot be carried forward
+- Restrictions: Cannot take more than 3 consecutive days without manager approval
+
+1.1.2 Sick Leave
+- Entitlement: 10 days per calendar year
+- Application: Can be taken without advance notice
+- Reporting: Must report to manager within 24 hours of taking leave
+- Documentation: Medical certificate required for leaves exceeding 3 consecutive days
+- Carry-forward: Up to 5 days can be carried forward to next year
+
+1.1.3 Annual Leave
+- Entitlement: 20 days per calendar year
+- Application: Must apply with at least 2 weeks notice
+- Manager Approval: Requires manager and HOD approval
+- Blackout Periods: Cannot take during product launches or critical deliverables
+- Carry-forward: Maximum 10 days can be carried forward to next year
+
+1.1.4 Bereavement Leave
+- Entitlement: 3 days for immediate family (parents, spouse, children)
+- Entitlement: 1 day for extended family (grandparents, siblings)
+- Documentation: Death certificate or obituary notice required
+
+1.2 Leave Application Process
+
+Step 1: Submit application through the HR portal at least 2 days in advance
+Step 2: Receive approval notification via email
+Step 3: Ensure work handover is complete before leave
+Step 4: Provide leave report link to manager
+Step 5: On return, complete "Return to Work" checklist
+
+1.3 Leave Encashment
+
+- Unused leave at year-end is forfeited and cannot be carried forward
+- Exception: Earned leave can be encashed at separation at basic salary rate
+- Encashment amount: (unused days × daily rate × basic salary) ÷ 365
+- No partial day encashment; minimum encashment unit is 1 full day
+
+1.4 Unauthorized Absence
+
+- Taking leave without approval results in loss of pay
+- Repeated unauthorized absence (3+ instances) may result in termination
+- Absence during critical periods attracts additional disciplinary action
+
+===============================================================================
+2. SALARY AND BENEFITS
+===============================================================================
+
+2.1 Salary Processing
+
+- Processing Date: 25th of every month
+- Payment Method: Direct transfer to employee's registered bank account
+- Delayed Processing: In case of banking issues, HR will notify within 24 hours
+- Holidays: If 25th falls on a weekend/holiday, payment is made on the previous working day
+
+2.2 Salary Structure
+
+Monthly salary comprises:
+- Basic Salary: Fixed base compensation
+- House Rent Allowance (HRA): Location-based allowance
+- Dearness Allowance (DA): Inflation adjustment
+- Special Allowance: Additional compensation
+- Variable Pay: Performance-linked bonus (if applicable)
+
+2.3 Salary Slip
+
+- Availability: Digital salary slips generated on 25th of every month
+- Access: Available in employee portal under "Payroll" section
+- Official Record: Digital salary slip is the official and legal record
+- Retention: Employees must retain slips for 3 years for tax and compliance purposes
+
+2.4 Tax Deductions
+
+- Income Tax: As per government rules (TDS deducted monthly)
+- Professional Tax: Applicable as per state regulations
+- Employee Provident Fund (PF): 12% of basic salary
+- Employee State Insurance (ESI): As per government mandate
+
+2.5 Performance Bonus
+
+- Eligibility: Employees with 6+ months tenure
+- Basis: Performance rating and company revenue targets
+- Payout: Typically in December
+- Calculation: 0-100% of monthly basic salary (varies by rating)
+
+===============================================================================
+3. HEALTH INSURANCE
+===============================================================================
+
+3.1 Coverage
+
+- Scope: All employees are automatically covered from day 1 of employment
+- Plan Type: Comprehensive health insurance with cashless hospitalization
+- Coverage Amount: Rs. 5,00,000 per employee per year
+- Family Plan: Spouse and dependent children can be added
+
+3.2 Eligible Dependents
+
+- Spouse: Legally married spouse
+- Children: Biological/adopted children up to age 23 (or 25 if pursuing education)
+- Parents: Parents of employees above age 60 (additional premium)
+
+3.3 Health Insurance Claims
+
+3.3.1 In-Network Hospitals
+- Coverage: 100% cashless treatment at empaneled hospitals
+- Listing: Hospital network available on the insurer's website
+- Direct Settlement: Hospital settles claim directly with insurer
+
+3.3.2 Out-of-Network Claims
+- Reimbursement: 80% of actual expense (20% employee co-pay)
+- Documentation: Original receipts, prescriptions, medical reports required
+- Submission Deadline: Claims must be submitted within 30 days of incurring expense
+- Processing Time: Claims processed within 7-10 business days
+- Late Claims: Claims submitted after 30 days are rejected
+
+3.3.3 Required Documentation
+- Original itemized bill/receipt from hospital
+- Prescription from treating physician
+- Medical reports and test results (if any)
+- Insurance claim form (signed and dated)
+- Proof of identity
+
+3.4 Annual Medical Check-up
+
+- Frequency: Once per calendar year
+- Coverage: 100% employer-paid
+- Scope: Basic health screening, blood work, ECG, etc.
+- Scheduling: Through HR department
+
+===============================================================================
+4. IT SECURITY POLICY
+===============================================================================
+
+4.1 Password Policy
+
+Requirement: All passwords must adhere to the following standards:
+- Minimum Length: 12 characters
+- Character Mix: Must include uppercase, lowercase, numbers, and special characters
+- Expiry: Password must be changed every 90 days
+- Reusability: Cannot reuse the same password within last 5 changes
+- Sharing: Passwords must not be shared with anyone, including IT staff
+
+4.2 Data Protection
+
+- Confidential Data: All company documents are confidential
+- USB Devices: Personal USB devices are not allowed
+- Cloud Storage: Only approved cloud services (Google Drive, OneDrive) can be used
+- Backup: All work must be saved to company servers, not personal devices
+- Encryption: All laptops must use full-disk encryption
+
+4.3 Incident Reporting
+
+- Data Breach: Report immediately to IT@nextai.tech
+- Suspicious Activity: Report phishing emails or unusual access attempts
+- Lost Device: Report lost/stolen laptops or phones within 1 hour
+- Response Time: IT responds to security incidents within 2 hours
+
+===============================================================================
+5. REMOTE WORK POLICY
+===============================================================================
+
+5.1 Eligibility
+
+- Tenure: Minimum 6 months of employment
+- Role: Must be approved by department head
+- Performance: Performance rating must be "Meets Expectations" or above
+
+5.2 Remote Work Allowance
+
+- Days per Week: Up to 3 days per week (Monday-Friday)
+- Scheduling: Must plan with manager by end of previous week
+- Equipment: Company provides laptop and Internet allowance (Rs. 1,000/month)
+- Workspace: Employee responsible for adequate workspace at home
+
+5.3 Attendance Tracking
+
+- Logging: Must log "Remote" status in HRMS before start of day
+- Time Tracking: Work hours tracked via activity monitoring tool
+- Availability: Must be available on company communication channels
+- Meetings: Attend all scheduled meetings, whether in-office or virtual
+
+5.4 Conduct
+
+- Confidentiality: No discussing confidential work in public places
+- Distractions: Minimize background noise during video calls
+- Professional Appearance: Dress appropriately for video meetings
+- Workspace: Ensure professional background for video calls
+
+===============================================================================
+6. CODE OF CONDUCT
+===============================================================================
+
+6.1 Professional Behavior
+
+- Respect: Treat all colleagues with respect and dignity
+- Harassment: Zero tolerance for sexual harassment, discrimination, bullying
+- Conduct: Maintain professional demeanor in all interactions
+- Dress Code: Business casual dress code (Monday-Friday, in-office)
+
+6.2 Conflict of Interest
+
+- Outside Work: Prior written approval required for outside employment
+- Gifts: Cannot accept gifts exceeding Rs. 5,000 in value
+- Relatives: Cannot directly or indirectly report to a family member
+- Vendor Relations: Cannot have financial relationships with vendors
+
+6.3 Compliance
+
+- Violations: Any violation is grounds for disciplinary action
+- Escalation: Violations reported to Ethics@nextai.tech are investigated independently
+- Confidentiality: Reporter identity protected during investigation
+- Action: Violations may result in suspension, termination, or legal action
+
+===============================================================================
+7. PERFORMANCE MANAGEMENT
+===============================================================================
+
+7.1 Performance Appraisal Cycle
+
+- Frequency: Annual appraisal (January)
+- Mid-year: Informal check-in with manager (July)
+- Ratings: 1 (Below) to 5 (Exceptional)
+- Timelines: Appraisals completed by end of January
+
+7.2 Rating Scale
+
+1. Below Expectations: Does not meet minimum job requirements
+2. Needs Development: Meets some but not all requirements
+3. Meets Expectations: Meets all job requirements consistently
+4. Exceeds Expectations: Consistently goes beyond requirements
+5. Exceptional: Top performer, role model for organization
+
+7.3 Career Development
+
+- Learning Budget: Rs. 50,000 per employee per year
+- Courses: Prior approval required for online courses
+- Certifications: Company reimburses 100% of job-related certification costs
+- Mentorship: Matched with senior mentors for career guidance
+
+===============================================================================
+
+Document Version: 2.0
+Last Updated: January 2024
+Next Review Date: January 2025
+
+For queries regarding HR policies, contact: hr@nextai.tech

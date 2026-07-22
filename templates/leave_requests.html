@@ -1,0 +1,376 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<p><strong>Total Leaves:</strong> {{ leaves|length }}</p>
+
+<h2 class="fw-bold mb-4">
+    Leave Registry System
+</h2>
+
+<div class="row g-4 mb-4">
+
+    <div class="col-lg-4">
+        <div class="stats-card pending-card">
+            <div class="stats-icon">
+                <i class="bi bi-hourglass-split"></i>
+            </div>
+
+            <div class="stats-content">
+                <h6>PENDING REQUESTS</h6>
+                <h2 class="stats-number">{{ pending_count }}</h2>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="stats-card approved-card">
+            <div class="stats-icon">
+                <i class="bi bi-check-circle-fill"></i>
+            </div>
+
+            <div class="stats-content">
+                <h6>APPROVED THIS MONTH</h6>
+                <h2 class="stats-number">{{ approved_count }}</h2>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="stats-card active-card">
+            <div class="stats-icon">
+                <i class="bi bi-calendar-event-fill"></i>
+            </div>
+
+            <div class="stats-content">
+                <h6>ACTIVE LEAVES</h6>
+                <h2 class="stats-number">{{ active_count }}</h2>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Filters -->
+
+<div class="card shadow-sm border-0 rounded-4 mb-4">
+
+    <div class="card-body">
+
+        <div class="row g-3 align-items-center">
+
+            <div class="col-lg-5">
+
+                <div class="input-group">
+
+                    <span class="input-group-text bg-white">
+                        <i class="bi bi-search"></i>
+                    </span>
+
+                    <input
+                        type="text"
+                        id="searchLeave"
+                        class="form-control"
+                        placeholder="Search employee, reason or leave type...">
+
+                </div>
+
+            </div>
+
+            <div class="col-lg-3">
+
+                <select id="statusFilter" class="form-select">
+
+                    <option value="">All Status</option>
+                    <option>Pending</option>
+                    <option>Approved</option>
+                    <option>Rejected</option>
+
+                </select>
+
+            </div>
+
+            <div class="col-lg-3">
+
+                <select id="priorityFilter" class="form-select">
+
+                    <option value="">All Priority</option>
+                    <option>Critical</option>
+                    <option>High</option>
+                    <option>Normal</option>
+                    <option>Low</option>
+
+                </select>
+
+            </div>
+
+            <div class="col-lg-1">
+
+                <button class="btn btn-primary w-100">
+                    <i class="bi bi-arrow-clockwise"></i>
+                </button>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+<!-- Leave Table -->
+
+<div class="card dashboard-panel">
+
+    <div class="card-header panel-header">
+
+        Operational Leave Registry
+
+    </div>
+
+    <div class="card-body p-0">
+
+        <table class="table align-middle table-hover mb-0">
+
+            <thead class="table-light">
+    <tr>
+        <th style="width: 100px">Staff Member</th>
+        <th style="width: 150px;">Leave Type</th>
+        <th style="width: 150px;">Duration</th>     
+        <th style="width: 110px">Reason</th>
+        <th style="width: 130px;">Priority</th>
+        <th style="width: 130px;">Status</th>
+        <th class="text-center" style="width: 110px;">Actions</th>
+    </tr>
+</thead>
+
+            <tbody>
+
+            {% for leave in leaves %}
+
+            <tr>
+
+                <!-- Employee -->
+
+                <td>
+
+                    <div class="d-flex align-items-center">
+
+                        <div class="employee-avatar">
+
+                            {{ leave[1][0] }}
+
+                        </div>
+
+                        <div class="ms-3">
+
+                            <div class="fw-bold">
+
+                                {{ leave[1] }}
+
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                </td>
+
+                <!-- Leave Type -->
+
+                <td>
+
+                    <span class="badge bg-primary-subtle text-primary rounded-pill px-3 py-2">
+
+                        {{ leave[2] }}
+
+                    </span>
+
+                </td>
+
+                <!-- Duration -->
+
+                <td>
+
+                    <div class="fw-semibold">
+
+                        {{ leave[3] }}
+
+                    </div>
+
+                    <small class="text-muted">
+
+                        {{ leave[4] }}
+
+                    </small>
+
+                </td>
+                <!-- Reason -->
+
+                <td style="max-width:280px;">
+
+                    {{ leave[6] }}
+
+                </td>
+
+                <!-- Priority -->
+
+                <td>
+                     {% if leave[8] == "Critical" %}
+                    <span class="badge bg-danger rounded-pill px-3">
+                       Critical
+                    </span>
+
+                    {% elif leave[8] == "High" %}
+
+                    <span class="badge bg-danger rounded-pill px-3">
+
+                        High
+
+                    </span>
+
+                    {% elif leave[8] == "Normal" %}
+
+                    <span class="badge bg-warning text-dark rounded-pill px-3">
+
+                        Normal
+
+                    </span>
+
+                    {% else %}
+
+                    <span class="badge bg-success rounded-pill px-3">
+
+                        Low
+
+                    </span>
+
+                    {% endif %}
+
+                </td>
+
+                <!-- Status -->
+
+                <td>
+
+                    {% if leave[7] == "Pending" %}
+
+                    <span class="badge bg-warning text-dark rounded-pill px-3 py-2">
+
+                        Pending
+
+                    </span>
+
+                    {% elif leave[7] == "Approved" %}
+
+                    <span class="badge bg-success rounded-pill px-3 py-2">
+
+                        Approved
+
+                    </span>
+
+                    {% else %}
+
+                    <span class="badge bg-danger rounded-pill px-3 py-2">
+
+                        Rejected
+
+                    </span>
+
+                    {% endif %}
+
+                </td>
+
+                <!-- Actions -->
+
+                <td>
+
+                    {% if leave[7] == "Pending" %}
+
+                    <div class="d-flex gap-2">
+
+                        <a href="/approve-leave/{{ leave[0] }}"
+                           class="btn btn-success btn-sm rounded-pill">
+
+                            <i class="bi bi-check-lg"></i>
+
+                        </a>
+
+                        <a href="/reject-leave/{{ leave[0] }}"
+                           class="btn btn-danger btn-sm rounded-pill">
+
+                            <i class="bi bi-x-lg"></i>
+
+                        </a>
+
+                    </div>
+
+                    {% else %}
+
+                    <button class="btn btn-light btn-sm rounded-pill" disabled>
+
+                        Closed
+
+                    </button>
+
+                    {% endif %}
+
+                </td>
+
+            </tr>
+
+            {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    </div>
+
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+
+<script>
+
+const search = document.getElementById("searchLeave");
+const status = document.getElementById("statusFilter");
+const priority = document.getElementById("priorityFilter");
+
+function filterTable(){
+
+    const rows = document.querySelectorAll("tbody tr");
+
+    rows.forEach(row => {
+
+        const text = row.innerText.toLowerCase();
+
+        const matchSearch =
+            text.includes(search.value.toLowerCase());
+
+        const matchStatus =
+            status.value === "" ||
+            text.includes(status.value.toLowerCase());
+
+        const matchPriority =
+            priority.value === "" ||
+            text.includes(priority.value.toLowerCase());
+
+        row.style.display =
+            (matchSearch && matchStatus && matchPriority)
+            ? ""
+            : "none";
+
+    });
+
+}
+
+search.addEventListener("keyup", filterTable);
+status.addEventListener("change", filterTable);
+priority.addEventListener("change", filterTable);
+
+</script>
+
+{% endblock %}

@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="container mt-4">
+
+   <div class="d-flex justify-content-between align-items-center mb-4">
+
+    <div>
+
+        <h2 class="fw-bold mb-1">
+            <i class="bi bi-people-fill text-primary me-2"></i>
+            Employee Management
+        </h2>
+
+        <p class="text-muted mb-0">
+            Manage employee records and organization details
+        </p>
+
+    </div>
+
+    <a href="/add-employee"
+       class="btn btn-primary rounded-pill px-4">
+
+        <i class="bi bi-person-plus-fill me-2"></i>
+
+        Add Employee
+
+    </a>
+
+</div>
+
+   <div class="card shadow-sm border-0 rounded-4 mb-4">
+
+    <div class="card-body">
+
+        <form method="GET" action="/employees">
+
+            <div class="row g-3 align-items-center">
+
+                <!-- Search Box -->
+
+                <div class="col-lg-8">
+
+                    <div class="input-group">
+
+                        <span class="input-group-text bg-white border-end-0">
+
+                            <i class="bi bi-search"></i>
+
+                        </span>
+
+                        <input
+                            type="text"
+                            name="search"
+                            class="form-control border-start-0"
+                            placeholder="Search Employee ID, Name, Department or Manager..."
+                            value="{{ search }}">
+
+                    </div>
+
+                </div>
+
+                <!-- Search Button -->
+
+                <div class="col-lg-2 d-grid">
+
+                    <button class="btn btn-primary rounded-pill">
+
+                        <i class="bi bi-search me-2"></i>
+
+                        Search
+
+                    </button>
+
+                </div>
+
+                <!-- Reset Button -->
+
+                <div class="col-lg-2 d-grid">
+
+                    <a href="/employees"
+                       class="btn btn-outline-secondary rounded-pill">
+
+                        <i class="bi bi-arrow-clockwise me-2"></i>
+
+                        Reset
+
+                    </a>
+
+                </div>
+
+            </div>
+
+        </form>
+
+    </div>
+
+</div>
+
+    <table class="table table-hover align-middle mb-0">
+
+     <thead class="table-light">
+
+<tr>
+
+    <th>Employee</th>
+
+    <th>WhatsApp</th>
+
+    <th>Department</th>
+
+    <th>Manager</th>
+
+    <th>Status</th>
+
+    <th width="120">Actions</th>
+
+</tr>
+
+</thead>
+
+    <tbody>
+
+{% for employee in employees %}
+
+<tr>
+
+    <!-- Employee -->
+
+    <td>
+
+        <div class="d-flex align-items-center">
+
+            <div class="employee-avatar">
+
+                {{ employee[1][0]|upper }}
+
+            </div>
+
+            <div class="ms-3">
+
+                <div class="fw-bold">
+
+                    {{ employee[1] }}
+
+                </div>
+
+                <small class="text-muted">
+
+                    {{ employee[0] }}
+
+                </small>
+
+            </div>
+
+        </div>
+
+    </td>
+
+    <!-- WhatsApp -->
+
+    <td>
+
+        <i class="bi bi-whatsapp text-success me-2"></i>
+
+        {{ employee[2] }}
+
+    </td>
+
+    <!-- Department -->
+
+    <td>
+
+        <span class="badge bg-primary-subtle text-primary rounded-pill px-3 py-2">
+
+            {{ employee[3] }}
+
+        </span>
+
+    </td>
+
+    <!-- Manager -->
+
+    <td>
+
+        <i class="bi bi-person-workspace text-secondary me-2"></i>
+
+        {{ employee[4] }}
+
+    </td>
+    <!-- Status -->
+
+<td>
+
+    {% if employee[5] == "On Leave" %}
+
+        <span class="badge bg-warning text-dark rounded-pill px-3 py-2">
+
+            <i class="bi bi-airplane-fill me-1"></i>
+
+            On Leave
+
+        </span>
+
+    {% else %}
+
+        <span class="badge bg-success rounded-pill px-3 py-2">
+
+            <i class="bi bi-check-circle-fill me-1"></i>
+
+            Active
+
+        </span>
+
+    {% endif %}
+
+</td>
+
+    <!-- Actions -->
+
+    <td>
+
+        <div class="d-flex gap-2">
+
+            <a href="/edit-employee/{{ employee[0] }}"
+               class="btn btn-warning btn-sm rounded-pill">
+
+                <i class="bi bi-pencil-square"></i>
+
+            </a>
+
+            <a href="/delete-employee/{{ employee[0] }}"
+               class="btn btn-danger btn-sm rounded-pill"
+               onclick="return confirm('Delete this employee?')">
+
+                <i class="bi bi-trash"></i>
+
+            </a>
+
+        </div>
+
+    </td>
+
+</tr>
+
+{% endfor %}
+
+</tbody>
+    </table>
+
+</div>
+
+{% endblock %}

@@ -1,0 +1,237 @@
+{% extends 'base.html' %}
+
+{% block content %}
+
+<div class="container-fluid py-3">
+
+
+<!-- Page Header -->
+<div class="d-flex justify-content-between align-items-center mb-4">
+
+    <div>
+        <h2 class="fw-bold mb-1">
+            <i class="bi bi-pencil-square text-warning me-2"></i>
+            Edit Employee
+        </h2>
+
+        <p class="text-muted mb-0">
+            Update employee profile and department information
+        </p>
+    </div>
+
+    <a href="/employees"
+       class="btn btn-outline-secondary rounded-pill px-4">
+
+        <i class="bi bi-arrow-left me-2"></i>
+        Back to Employees
+
+    </a>
+
+</div>
+
+<!-- Form Card -->
+<div class="card shadow-sm border-0 rounded-4 overflow-hidden">
+
+    <!-- Card Header -->
+    <div class="bg-warning text-dark px-4 py-3">
+
+        <div class="d-flex align-items-center">
+
+            <div class="bg-white bg-opacity-50 rounded-circle p-2 me-3">
+                <i class="bi bi-person-gear fs-4"></i>
+            </div>
+
+            <div>
+                <h5 class="mb-0 fw-semibold">Update Employee Information</h5>
+                <small class="opacity-75">Modify employee details and save changes</small>
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- Card Body -->
+    <div class="card-body p-4">
+
+        <form method="POST">
+
+            <div class="row g-4">
+
+                <!-- Employee ID (Read Only) -->
+                <div class="col-lg-6">
+
+                    <label class="form-label fw-semibold">
+                        <i class="bi bi-person-badge text-primary me-1"></i>
+                        Employee ID
+                    </label>
+
+                    <input type="text"
+                           class="form-control form-control-lg rounded-3 bg-light"
+                           value="{{ employee[0] }}"
+                           readonly>
+
+                    <div class="form-text">
+                        Employee ID cannot be changed.
+                    </div>
+
+                </div>
+
+                <!-- Employee Name -->
+                <div class="col-lg-6">
+
+                    <label class="form-label fw-semibold">
+                        <i class="bi bi-person text-primary me-1"></i>
+                        Full Name
+                    </label>
+
+                    <input type="text"
+                           name="name"
+                           class="form-control form-control-lg rounded-3"
+                           value="{{ employee[1] }}"
+                           required>
+
+                </div>
+
+                <!-- WhatsApp Number -->
+                <div class="col-lg-6">
+
+                    <label class="form-label fw-semibold">
+                        <i class="bi bi-whatsapp text-success me-1"></i>
+                        WhatsApp Number
+                    </label>
+
+                    <div class="input-group input-group-lg">
+
+                        <select class="form-select rounded-start-3"
+                                name="country_code"
+                                style="max-width: 150px;"
+                                required>
+
+                            <option value="91" selected>🇮🇳 +91</option>
+                            <option value="1">🇺🇸 +1</option>
+                            <option value="44">🇬🇧 +44</option>
+                            <option value="971">🇦🇪 +971</option>
+
+                        </select>
+
+                        <input type="tel"
+                               name="whatsapp"
+                               class="form-control rounded-end-3"
+                               value="{{ employee[2][-10:] }}"
+                               maxlength="10"
+                               pattern="[0-9]{10}"
+                               inputmode="numeric"
+                               required>
+
+                    </div>
+
+                    <div class="form-text">
+                        Enter only the 10-digit mobile number.
+                    </div>
+
+                </div>
+
+                <!-- Department -->
+                <div class="col-lg-6">
+
+                    <label class="form-label fw-semibold">
+                        <i class="bi bi-building text-primary me-1"></i>
+                        Department
+                    </label>
+
+                    <select name="department"
+                            class="form-select form-select-lg rounded-3"
+                            required>
+
+                        <option value="Engineering" {% if employee[4]=='Engineering' %}selected{% endif %}>Engineering</option>
+                        <option value="HR" {% if employee[4]=='HR' %}selected{% endif %}>Human Resources</option>
+                        <option value="Finance" {% if employee[4]=='Finance' %}selected{% endif %}>Finance</option>
+                        <option value="Operations" {% if employee[4]=='Operations' %}selected{% endif %}>Operations</option>
+                        <option value="Sales" {% if employee[4]=='Sales' %}selected{% endif %}>Sales</option>
+                        <option value="Marketing" {% if employee[4]=='Marketing' %}selected{% endif %}>Marketing</option>
+                        <option value="Support" {% if employee[4]=='Support' %}selected{% endif %}>Customer Support</option>
+
+                    </select>
+
+                </div>
+
+                <!-- Manager -->
+                <div class="col-lg-6">
+
+                    <label class="form-label fw-semibold">
+                        <i class="bi bi-person-workspace text-primary me-1"></i>
+                        Reporting Manager
+                    </label>
+
+                    <input type="text"
+                           name="manager"
+                           class="form-control form-control-lg rounded-3"
+                           value="{{ employee[3] }}"
+                           required>
+
+                </div>
+
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="d-flex flex-wrap gap-3 mt-5 pt-3 border-top">
+
+                <button type="submit"
+                        class="btn btn-warning btn-lg rounded-pill px-5 shadow-sm text-dark fw-semibold">
+
+                    <i class="bi bi-check-circle-fill me-2"></i>
+                    Update Employee
+
+                </button>
+
+                <a href="/employees"
+                   class="btn btn-light btn-lg rounded-pill px-5 border">
+
+                    <i class="bi bi-x-circle me-2"></i>
+                    Cancel
+
+                </a>
+
+            </div>
+
+        </form>
+
+    </div>
+
+</div>
+
+
+</div>
+
+<!-- Phone Validation Script -->
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+
+    const phoneInput = document.querySelector('input[name="whatsapp"]');
+
+    // Allow only digits while typing
+    phoneInput.addEventListener('input', function () {
+
+        this.value = this.value.replace(/\D/g, '');
+
+        if (this.value.length > 10) {
+            this.value = this.value.slice(0, 10);
+        }
+    });
+
+    // Validate before form submit
+    phoneInput.form.addEventListener('submit', function (e) {
+
+        if (phoneInput.value.length !== 10) {
+
+            e.preventDefault();
+
+            alert('Please enter exactly 10 digits');
+        }
+    });
+
+});
+</script>
+
+{% endblock %}

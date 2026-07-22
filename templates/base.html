@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html>
+
+
+
+
+
+<head>
+
+    <title>ApexHR</title>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1">
+
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        rel="stylesheet">
+
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='css/style.css') }}">
+
+</head>
+
+<body>
+
+<div class="wrapper">
+
+    <!-- Sidebar -->
+
+    <div class="sidebar">
+
+    <div class="logo-area">
+
+        <div class="logo-circle">
+            <i class="bi bi-building-fill"></i>
+        </div>
+
+        <div>
+
+            <h4>ApexHR</h4>
+
+           
+
+        </div>
+
+    </div>
+
+    <hr>
+
+    <a href="/admin" class="nav-item">
+        <i class="bi bi-speedometer2"></i>
+        Dashboard
+    </a>
+
+    <a href="/employees" class="nav-item">
+        <i class="bi bi-people-fill"></i>
+        Employees
+    </a>
+
+    <a href="/leave-requests" class="nav-item">
+        <i class="bi bi-calendar-check-fill"></i>
+        Leave Requests
+    </a>
+
+    <a href="/upload-salary" class="nav-item">
+        <i class="bi bi-wallet2"></i>
+        Payroll
+    </a>
+
+     <li class="nav-item mb-2">
+
+    <a href="/policy-management" class="nav-link">
+
+        <i class="bi bi-folder2-open me-2"></i>
+
+        HR Policy Library
+
+    </a>
+
+</li>
+
+    <div class="sidebar-footer">
+
+        <a href="{{ url_for('admin.logout') }}" class="nav-item text-danger">
+            <i class="bi bi-box-arrow-right"></i>
+            Logout
+        </a>
+
+    </div>
+
+</div>
+
+    <!-- Main -->
+
+    <div class="main">
+
+        <!-- Top Navbar -->
+
+    <div class="topbar">
+
+    <div class="top-left">
+
+        <h2>Executive Dashboard</h2>
+
+    </div>
+
+    <div class="top-right">
+
+        <div class="search-box">
+
+            <i class="bi bi-search"></i>
+
+            <input
+                type="text"
+                placeholder="Search..."
+            >
+
+        </div>
+
+        <button class="icon-btn">
+
+            <i class="bi bi-bell"></i>
+
+            <span class="notification-dot"></span>
+
+        </button>
+
+        <span class="status-badge">
+
+            <i class="bi bi-circle-fill"></i>
+
+            Online
+
+        </span>
+
+        <div class="profile">
+
+            <div class="avatar">
+
+                <i class="bi bi-person-fill"></i>
+
+            </div>
+
+            <div>
+
+                <strong>Admin</strong><br>
+
+                <small>HR Manager</small>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+        <div class="content">
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+
+            <div class="alert alert-{{ category }} alert-dismissible fade show shadow-sm mb-3"
+                 role="alert">
+
+                {{ message }}
+
+                <button type="button"
+                        class="btn-close"
+                        data-bs-dismiss="alert"
+                        aria-label="Close"></button>
+
+            </div>
+
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    {% block content %}
+    {% endblock %}
+
+</div>
+
+    </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+{% block scripts %}
+{% endblock %}
+
+</body>
+</html>

@@ -1,6 +1,16 @@
 import sqlite3
+import os
 
-conn = sqlite3.connect('data/employee.db')
+from pathlib import Path
+
+
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DB_PATH = BASE_DIR / 'data' / 'employee.db'
+os.makedirs(BASE_DIR / 'data', exist_ok=True)
+
+conn = sqlite3.connect('DB_PATH')
 cursor = conn.cursor()
 
 cursor.execute('''

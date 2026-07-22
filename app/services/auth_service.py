@@ -1,13 +1,3 @@
-
-import sqlite3
-from werkzeug.security import check_password_hash
-
-
-
-
-
-
-
 import sqlite3
 from pathlib import Path
 from werkzeug.security import check_password_hash
@@ -19,12 +9,16 @@ from werkzeug.security import check_password_hash
 BASE_DIR = Path(__file__).resolve().parents[2]
 DB_PATH = BASE_DIR / 'data' / 'employee.db'
 
+# Ensure data directory exists
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
 
 def authenticate_admin(email, password):
     """Verify admin credentials."""
 
     print("\\n========== AUTH DEBUG ==========")
     print("Database path:", DB_PATH)
+    print("Database exists:", DB_PATH.exists())
     print("Input email:", email)
 
     conn = sqlite3.connect(DB_PATH)
@@ -64,4 +58,3 @@ def authenticate_admin(email, password):
         }
 
     return None
-

@@ -73,6 +73,14 @@ PHONE_NUMBER_ID = app.config['PHONE_NUMBER_ID']
 WABA_ID = app.config['WABA_ID']
 VERIFY_TOKEN = app.config['VERIFY_TOKEN']
 
+print('=' * 50)
+print('CONFIG DEBUG')
+print('WHATSAPP_TOKEN exists:', bool(WHATSAPP_TOKEN))
+print('PHONE_NUMBER_ID:', PHONE_NUMBER_ID)
+print('WABA_ID:', WABA_ID)
+print('VERIFY_TOKEN exists:', bool(VERIFY_TOKEN))
+print('=' * 50)
+
 configure(
     WHATSAPP_TOKEN,
     PHONE_NUMBER_ID

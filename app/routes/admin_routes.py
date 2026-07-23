@@ -45,7 +45,7 @@ from validators import validate_phone, ValidationError
 from app.services.whatsapp_service import send_text
 
 # Chroma rebuild
-from scripts.update_db import build_index
+
 
 logger = logging.getLogger(__name__)
 
@@ -712,6 +712,7 @@ def policy_management():
             filepath = os.path.join(POLICY_FOLDER, filename)
             file.save(filepath)
 
+            from scripts.update_db import build_index
             # Rebuild index
             build_index()
 
@@ -753,6 +754,8 @@ def delete_policy(filename):
             return redirect(url_for('admin.policy_management'))
 
         os.remove(filepath)
+
+        from scripts.update_db import build_index
 
         # Rebuild index to remove chunks
         build_index()

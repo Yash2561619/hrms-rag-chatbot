@@ -59,18 +59,35 @@
 
 # conn.close()
 
+# import sqlite3
+
+# # conn = sqlite3.connect('employee.db')
+# # cursor = conn.cursor()
+# from database import get_connection
+
+# conn = get_connection()
+# cursor = conn.cursor()
+
+# cursor.execute("SELECT employee_id, name, whatsapp FROM employees")
+
+# for row in cursor.fetchall():
+#     print(row)
+
+# conn.close()
+
+
 import sqlite3
 
-# conn = sqlite3.connect('employee.db')
-# cursor = conn.cursor()
-from database import get_connection
-
-conn = get_connection()
+conn = sqlite3.connect('data/employee.db')
 cursor = conn.cursor()
 
-cursor.execute("SELECT employee_id, name, whatsapp FROM employees")
+cursor.execute("""
+UPDATE salary_slips
+SET file_path = 'uploads/salary_slips/EMP001_June_2026.pdf'
+WHERE employee_id = 'EMP001'
+""")
 
-for row in cursor.fetchall():
-    print(row)
-
+conn.commit()
 conn.close()
+
+print('Salary path updated')

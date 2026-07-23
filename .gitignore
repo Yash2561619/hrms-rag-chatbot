@@ -15,8 +15,8 @@ chroma_db/
 # Database
 data/*.db
 
-# Ignore generated salary slips only
-uploads/salary_slips/
+
+
 
 # OS
 .DS_Store

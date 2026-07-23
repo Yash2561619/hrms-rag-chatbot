@@ -797,11 +797,38 @@ def can_approve_leave(employee_id, leave_type, requested_days):
 
 
 def get_salary_slip_by_month(employee_id, month, year=None):
+    """
+    Fetch salary slip by month name.
+    Example: March -> 3
+    """
+
+    # Convert month name to month number
+    month_map = {
+        'January': 1,
+        'February': 2,
+        'March': 3,
+        'April': 4,
+        'May': 5,
+        'June': 6,
+        'July': 7,
+        'August': 8,
+        'September': 9,
+        'October': 10,
+        'November': 11,
+        'December': 12
+    }
+
+    month_num = month_map.get(month)
+
+    if not month_num:
+        return None
+
     conn = get_connection()
     cursor = conn.cursor()
 
     if year:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT file_path
             FROM salary_slips
             WHERE employee_id = ?
@@ -809,16 +836,21 @@ def get_salary_slip_by_month(employee_id, month, year=None):
               AND year = ?
             ORDER BY id DESC
             LIMIT 1
-        """, (employee_id, month, year))
+            """,
+            (employee_id, month_num, year)
+        )
     else:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT file_path
             FROM salary_slips
             WHERE employee_id = ?
               AND month = ?
             ORDER BY year DESC, id DESC
             LIMIT 1
-        """, (employee_id, month))
+            """,
+            (employee_id, month_num)
+        )
 
     row = cursor.fetchone()
     conn.close()

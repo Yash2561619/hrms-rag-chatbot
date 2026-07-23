@@ -800,7 +800,29 @@ def get_salary_slip_by_month(employee_id, month, year=None):
     conn = get_connection()
     cursor = conn.cursor()
 
-    print(f'DEBUG QUERY: employee={employee_id}, month={month}, year={year}')
+    # Convert month name to number
+    month_map = {
+        'January': 1,
+        'February': 2,
+        'March': 3,
+        'April': 4,
+        'May': 5,
+        'June': 6,
+        'July': 7,
+        'August': 8,
+        'September': 9,
+        'October': 10,
+        'November': 11,
+        'December': 12
+    }
+
+    month_num = month_map.get(month)
+
+    print(f'DEBUG QUERY: employee={employee_id}, month={month}, month_num={month_num}, year={year}')
+
+    if month_num is None:
+        conn.close()
+        return None
 
     if year:
         cursor.execute("""
@@ -811,7 +833,7 @@ def get_salary_slip_by_month(employee_id, month, year=None):
               AND year = ?
             ORDER BY id DESC
             LIMIT 1
-        """, (employee_id, month, year))
+        """, (employee_id, month_num, year))
     else:
         cursor.execute("""
             SELECT month, year, file_path
@@ -820,7 +842,7 @@ def get_salary_slip_by_month(employee_id, month, year=None):
               AND month = ?
             ORDER BY year DESC, id DESC
             LIMIT 1
-        """, (employee_id, month))
+        """, (employee_id, month_num))
 
     row = cursor.fetchone()
     print('DEBUG RESULT:', row)

@@ -16,30 +16,50 @@ logger = logging.getLogger(__name__)
 
 
 
-def handle_health_insurance_video(employee, base_url):
+import os
+
+def handle_health_insurance_video(employee):
+    """Send health insurance claim process video."""
+
     sender = employee['whatsapp']
     employee_id = employee['employee_id']
 
     try:
-        video_url = (
-            base_url.rstrip('/')
-            + '/static/videos/health_insurance_claim.mp4'
+        # Local file path on Render
+        video_path = os.path.join(
+            'uploads',
+            'videos',
+            'health_insurance_claim.mp4'
         )
 
-        send_video(
-            to=sender,
-            video_url=video_url,
-            caption='📹 Health Insurance Claim Process'
+        logger.info(
+            f'VIDEO_REQUEST | user={employee_id} | path={video_path}'
         )
+
+        # Check file exists
+        if not os.path.exists(video_path):
+
+            logger.error(
+                f'VIDEO_FILE_NOT_FOUND | path={video_path}'
+            )
+
+            send_text(
+                sender,
+                '❌ Health insurance video is not available right now.'
+            )
+            return
+
+        # Send video to WhatsApp
+        send_video(sender, video_path)
 
         logger.info(
             f'HEALTH_INSURANCE_VIDEO_SENT | user={employee_id}'
         )
 
-    except Exception as e:
+    except Exception:
+
         logger.exception(
-            f'HEALTH_INSURANCE_VIDEO_ERROR | '
-            f'user={employee_id} | error={str(e)}'
+            f'HEALTH_INSURANCE_VIDEO_ERROR | user={employee_id}'
         )
 
         send_text(

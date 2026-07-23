@@ -632,9 +632,28 @@ def upload_salary():
         
         try:
             employee_id = request.form.get('employee_id', '').strip()
-            month = request.form.get('month', '').strip()
-            year = request.form.get('year', '').strip()
+            month = request.form.get('month')
+            year = int(request.form.get('year'))
 
+            month_map = {
+              'January': 1,
+              'February': 2,
+              'March': 3,
+              'April': 4,
+              'May': 5,
+              'June': 6,
+              'July': 7,
+              'August': 8,
+              'September': 9,
+              'October': 10,
+              'November': 11,
+              'December': 12
+}
+            if str(month).isdigit():
+               month = int(month)
+            else:
+               month = month_map[month]
+               
             if 'salary_pdf' not in request.files:
                 flash('❌ No file selected')
                 return redirect(url_for('admin.upload_salary'))

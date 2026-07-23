@@ -352,50 +352,75 @@ def get_leave_details(request_id):
         "status": row[9]
     }
 
-def save_salary_slip(employee_id, month, year, file_path):
+import sqlite3
+import logging
+
+# Configure logging for structured output (better practice than raw print statements)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
+
+
+def save_salary_slip(employee_id: int, month: int, year: int, file_path: str) -> None:
+    """Saves or updates an employee's salary slip record in the database.
+
+    Args:
+        employee_id: Unique identifier for the employee.
+        month: Month of the salary slip (e.g., 1 to 12).
+        year: Year of the salary slip (e.g., 2026).
+        file_path: Relative or absolute path to the stored salary slip file.
+    """
+    logging.debug(
+        f"[DEBUG] emp_id: {employee_id}, month: {month} ({type(month).__name__}), "
+        f"year: {year} ({type(year).__name__}), path: {file_path}"
+    )
 
     conn = get_connection()
-    cursor = conn.cursor()
 
-    # Check if salary slip already exists
-    cursor.execute("""
-    SELECT id
-    FROM salary_slips
-    WHERE employee_id = ?
-      AND month = ?
-      AND year = ?
-    """, (employee_id, month, year))
+    try:
+        # Use connection as a context manager to handle automatic transaction commit/rollback
+        with conn:
+            cursor = conn.cursor()
 
-    row = cursor.fetchone()
+            # Check if salary slip already exists
+            cursor.execute(
+                """
+                SELECT id 
+                FROM salary_slips 
+                WHERE employee_id = ? AND month = ? AND year = ?
+                """,
+                (employee_id, month, year),
+            )
+            existing_record = cursor.fetchone()
 
-    if row:
-        cursor.execute("""
-        UPDATE salary_slips
-        SET file_path = ?
-        WHERE id = ?
-        """, (file_path, row[0]))
-    else:
-        cursor.execute("""
-        INSERT INTO salary_slips
-        (
-            employee_id,
-            month,
-            year,
-            file_path
-        )
-        VALUES (?,?,?,?)
-        """,
-        (
-            employee_id,
-            month,
-            year,
-            file_path
-        ))
+            if existing_record:
+                # Update existing record
+                record_id = existing_record[0]
+                cursor.execute(
+                    """
+                    UPDATE salary_slips 
+                    SET file_path = ? 
+                    WHERE id = ?
+                    """,
+                    (file_path, record_id),
+                )
+                logging.info(f"Updated salary slip [ID: {record_id}] for employee {employee_id}.")
+            else:
+                # Insert new record
+                cursor.execute(
+                    """
+                    INSERT INTO salary_slips (employee_id, month, year, file_path)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (employee_id, month, year, file_path),
+                )
+                logging.info(f"Inserted new salary slip for employee {employee_id}.")
 
-    conn.commit()
-    conn.close()
+    except sqlite3.Error as e:
+        logging.error(f"Database error while saving salary slip for employee {employee_id}: {e}")
+        raise
 
-
+    finally:
+        # Always close connection to prevent leaking resources
+        conn.close()
 def get_leave_history(employee_id):
 
     conn = get_connection()

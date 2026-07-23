@@ -68,7 +68,6 @@ def handle_health_insurance_video(employee):
         )
 
 
-from app.services.s3_service import send_document_from_s3
 
 def handle_salary_slip(employee, message):
     sender = employee["whatsapp"]
@@ -151,7 +150,11 @@ def handle_salary_slip(employee, message):
                 f'S3_SALARY_PATH | user={employee_id} | key={path}'
             )
 
-            send_document(sender, path, caption)
+            from app.services.s3_service import generate_presigned_url
+
+            s3_url = generate_presigned_url(path)
+
+            send_document(sender, s3_url, caption)
 
         # ==============================
         # LOCAL FILE

@@ -35,3 +35,13 @@ def generate_download_url(key, expires=3600):
         },
         ExpiresIn=expires
     )
+
+def generate_presigned_url(s3_key, expires=3600):
+    return s3.generate_presigned_url(
+        'get_object',
+        Params={
+            'Bucket': BUCKET_NAME,
+            'Key': s3_key
+        },
+        ExpiresIn=expires
+    )

@@ -650,15 +650,18 @@ def upload_salary():
                 return redirect(url_for('admin.upload_salary'))
 
             # Save file
-            SALARY_FOLDER = 'uploads/salary_slips'
-            os.makedirs(SALARY_FOLDER, exist_ok=True)
-            
-            filename = secure_filename(f'{employee_id}_{month}_{year}.pdf')
-            filepath = os.path.join(SALARY_FOLDER, filename)
-            file.save(filepath)
+            from app.services.s3_service import upload_salary_to_s3
 
-            # Save to database
-            save_salary_slip(employee_id, month, year, filepath)
+# Generate filename
+            filename = secure_filename(f'{employee_id}_{month}_{year}.pdf')
+
+# Upload directly to S3
+            s3_key = upload_salary_to_s3(file, filename)
+
+            logger.info(f'SALARY_UPLOADED_TO_S3 | key={s3_key}')
+
+# Save S3 key in database
+            save_salary_slip(employee_id, month, year, s3_key)
 
             log_activity(f'💰 Salary slip uploaded for {employee_id} ({month}/{year})')
             flash('✅ Salary slip uploaded successfully!')

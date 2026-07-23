@@ -104,7 +104,7 @@ def handle_salary_slip(employee, message):
                 month = value
                 break
 
-        year_match = re.search(r'\\b(20\\d{2})\\b', msg)
+        year_match = re.search(r'\b(20\\d{2})\b', msg)
         if year_match:
             year = int(year_match.group(1))
 

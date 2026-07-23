@@ -40,7 +40,7 @@ def generate_presigned_url(s3_key, expires=3600):
     return s3.generate_presigned_url(
         'get_object',
         Params={
-            'Bucket': BUCKET_NAME,
+            'Bucket': BUCKET,
             'Key': s3_key
         },
         ExpiresIn=expires

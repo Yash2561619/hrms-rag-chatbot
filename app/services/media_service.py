@@ -67,16 +67,10 @@ def handle_health_insurance_video(employee):
             '❌ Error sending insurance video.'
         )
 
-def handle_salary_slip(employee, message):
-    """
-    Send salary slip over WhatsApp.
-    
-    Examples:
-    - "give my salary slip" → latest
-    - "give my march salary slip" → March
-    - "give my april 2026 salary slip" → April 2026
-    """
 
+from app.services.s3_service import send_document_from_s3
+
+def handle_salary_slip(employee, message):
     sender = employee["whatsapp"]
     employee_id = employee["employee_id"]
 
@@ -85,9 +79,7 @@ def handle_salary_slip(employee, message):
             f'SALARY_SLIP_REQUEST | user={employee_id} | message="{message}"'
         )
 
-        # ---------------------------------
         # Extract month and year
-        # ---------------------------------
         month = None
         year = None
 
@@ -100,7 +92,7 @@ def handle_salary_slip(employee, message):
             "june": "June", "jun": "June",
             "july": "July", "jul": "July",
             "august": "August", "aug": "August",
-            "september": "September", "sep": "September", "sept": "September",
+            "september": "September", "sep": "September",
             "october": "October", "oct": "October",
             "november": "November", "nov": "November",
             "december": "December", "dec": "December"
@@ -108,14 +100,12 @@ def handle_salary_slip(employee, message):
 
         msg = message.lower()
 
-        # Check for matching month (full name or abbreviation)
         for key, value in months_map.items():
-            if re.search(rf'\b{key}\b', msg):
+            if re.search(rf'\\b{key}\\b', msg):
                 month = value
                 break
 
-        # Match 4-digit year starting with 20 (e.g., 2026)
-        year_match = re.search(r'\b(20\d{2})\b', msg)
+        year_match = re.search(r'\\b(20\\d{2})\\b', msg)
         if year_match:
             year = int(year_match.group(1))
 
@@ -123,58 +113,61 @@ def handle_salary_slip(employee, message):
             f'SALARY_QUERY_PARSED | user={employee_id} | month={month} | year={year}'
         )
 
-        # ---------------------------------
         # Fetch salary slip
-        # ---------------------------------
         if month:
             path = get_salary_slip_by_month(employee_id, month, year)
         else:
             path = get_latest_salary_slip(employee_id)
 
-        # ---------------------------------
-        # Handle missing slip
-        # ---------------------------------
+        # Not found
         if not path:
             logger.warning(
                 f'SALARY_SLIP_NOT_FOUND | user={employee_id} | month={month} | year={year}'
             )
 
             if month:
-                year_str = f" {year}" if year else ""
-                send_text(
-                    sender,
-                    f"❌ No salary slip found for {month}{year_str}."
-                )
+                send_text(sender, f'❌ No salary slip found for {month}.')
             else:
-                send_text(sender, "❌ No salary slip found.")
+                send_text(sender, '❌ No salary slip found.')
 
             return
-
-        # ---------------------------------
-        # Normalize file path and send PDF
-        # ---------------------------------
-        caption = (
-            f"Your {month} salary slip"
-            if month else
-            "Your latest salary slip"
-        )
 
         logger.info(
             f'SALARY_SLIP_FOUND | user={employee_id} | file={path}'
         )
 
-        # Convert DB path to actual uploads path
-        # DB stores: salary_slips/EMP001_June_2026.pdf
-        # Actual file: uploads/salary_slips/EMP001_June_2026.pdf
-        final_path = path
-        if not final_path.startswith('uploads/'):
-            final_path = os.path.join('uploads', final_path)
-
-        logger.info(
-            f'FINAL_SALARY_PATH | user={employee_id} | path={final_path}'
+        caption = (
+            f'Your {month} salary slip'
+            if month else
+            'Your latest salary slip'
         )
 
-        send_document(sender, final_path, caption)
+        # ==============================
+        # S3 FILE
+        # ==============================
+        if path.startswith('salary_slips/'):
+
+            logger.info(
+                f'S3_SALARY_PATH | user={employee_id} | key={path}'
+            )
+
+            send_document(sender, path, caption)
+
+        # ==============================
+        # LOCAL FILE
+        # ==============================
+        else:
+
+            final_path = path
+
+            if not final_path.startswith('uploads/'):
+                final_path = os.path.join('uploads', final_path)
+
+            logger.info(
+                f'LOCAL_SALARY_PATH | user={employee_id} | path={final_path}'
+            )
+
+            send_document(sender, final_path, caption)
 
         logger.info(
             f'SALARY_SLIP_SENT | user={employee_id} | month={month} | year={year}'
@@ -185,4 +178,8 @@ def handle_salary_slip(employee, message):
             f'SALARY_SLIP_ERROR | user={employee_id} | error={str(e)}',
             exc_info=True
         )
-        send_text(sender, "⚠️ An error occurred while retrieving your salary slip. Please try again later.")
+
+        send_text(
+            sender,
+            '⚠️ Error fetching salary slip. Please try again later.'
+        )

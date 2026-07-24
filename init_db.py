@@ -164,6 +164,16 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ("EMP003", "2026-07-15", "2026-07-20", 6, "Earned Leave", "Vacation", "vacation", "Normal", "Pending")
 ])
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS training_videos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    category TEXT NOT NULL,
+    description TEXT,
+    s3_key TEXT NOT NULL,
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+""")
 # =====================================================
 # Save Changes
 # =====================================================

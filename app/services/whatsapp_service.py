@@ -115,55 +115,67 @@ def send_document(to, file_path, caption):
             f'WHATSAPP_DOCUMENT_EXCEPTION | to={to} | file={caption}'
         )
         return False
-def send_video(to, file_path):
-    url = f'https://graph.facebook.com/v23.0/{PHONE_NUMBER_ID}/media'
 
-    headers = {
-        'Authorization': f'Bearer {WHATSAPP_TOKEN}'
-    }
+    
+import requests
+import logging
 
-    with open(file_path, 'rb') as f:
-        files = {
-            'file': ('video.mp4', f, 'video/mp4')
+logger = logging.getLogger(__name__)
+
+def send_video(to, video_url, caption="📹 Training Video"):
+    """
+    Send video from S3 URL to WhatsApp.
+
+    Args:
+        to (str): WhatsApp number.
+        video_url (str): S3 presigned URL.
+        caption (str): Video caption.
+    """
+
+    try:
+
+        url = f"https://graph.facebook.com/v23.0/{PHONE_NUMBER_ID}/messages"
+
+        headers = {
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+            "Content-Type": "application/json"
         }
-        data = {
-            'messaging_product': 'whatsapp'
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "video",
+            "video": {
+                "link": video_url,
+                "caption": caption
+            }
         }
 
         response = requests.post(
             url,
             headers=headers,
-            files=files,
-            data=data,
-            timeout=120
+            json=payload,
+            timeout=60
         )
 
-    media_id = response.json()['id']
+        if response.status_code != 200:
+            logger.error(
+                f"WHATSAPP_VIDEO_FAILED | status={response.status_code} | response={response.text}"
+            )
+            return False
 
-    message_url = (
-        f'https://graph.facebook.com/v23.0/'
-        f'{PHONE_NUMBER_ID}/messages'
-    )
+        logger.info(
+            f"WHATSAPP_VIDEO_SENT | to={to} | status={response.status_code}"
+        )
 
-    payload = {
-        'messaging_product': 'whatsapp',
-        'to': to,
-        'type': 'video',
-        'video': {
-            'id': media_id,
-            'caption': '📹 Health Insurance Claim Process'
-        }
-    }
+        return True
 
-    requests.post(
-        message_url,
-        headers={
-            'Authorization': f'Bearer {WHATSAPP_TOKEN}',
-            'Content-Type': 'application/json'
-        },
-        json=payload,
-        timeout=30
-    )
+    except Exception:
+        logger.exception(
+            f"WHATSAPP_VIDEO_EXCEPTION | to={to}"
+        )
+        return False
+    
 def mark_read(message_id):
     url = f'https://graph.facebook.com/v23.0/{PHONE_NUMBER_ID}/messages'
 

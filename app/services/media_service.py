@@ -1,73 +1,130 @@
-import os
-
-import re
 import logging
-from database import get_latest_salary_slip
-from app.services.whatsapp_service import (
-    send_text,
-    send_document,
-    send_video
-)
 import re
+import os
+from app.services.s3_service import generate_presigned_url
+from app.services.whatsapp_service import (
+    send_document,
+    send_text,
+    send_video,
+)
+from database import (
+    get_latest_salary_slip,
+    get_salary_slip_by_month,
+    get_training_video_by_category,
+)
 
-from database import get_salary_slip_by_month
 # Properly initialize the logger using the current module name
 logger = logging.getLogger(__name__)
 
+def handle_training_video(employee, message):
+    """
+    Send training video based on user request.
 
+    Supported categories:
+    - Health Insurance
+    - Safety
+    - Induction
+    """
 
-import os
-
-def handle_health_insurance_video(employee):
-    """Send health insurance claim process video."""
-
-    sender = employee['whatsapp']
-    employee_id = employee['employee_id']
+    sender = employee["whatsapp"]
+    employee_id = employee["employee_id"]
 
     try:
-        # Local file path on Render
-        video_path = os.path.join(
-            'uploads',
-            'videos',
-            'health_insurance_claim.mp4'
-        )
+
+        msg = message.lower()
+
+        # ----------------------------
+        # Detect requested category
+        # ----------------------------
+        if any(word in msg for word in [
+            "insurance",
+            "health insurance",
+            "claim"
+        ]):
+            category = "Health Insurance"
+
+        elif any(word in msg for word in [
+            "safety",
+            "fire",
+            "security"
+        ]):
+            category = "Safety"
+
+        elif any(word in msg for word in [
+            "induction",
+            "joining",
+            "onboarding"
+        ]):
+            category = "Induction"
+
+        else:
+            send_text(
+                sender,
+                "❌ Please specify which training video you need.\n\n"
+                "Examples:\n"
+                "• Health Insurance\n"
+                "• Safety\n"
+                "• Induction"
+            )
+            return
 
         logger.info(
-            f'VIDEO_REQUEST | user={employee_id} | path={video_path}'
+            f"VIDEO_CATEGORY | user={employee_id} | category={category}"
         )
 
-        # Check file exists
-        if not os.path.exists(video_path):
+        # ----------------------------
+        # Fetch video from database
+        # ----------------------------
+        video = get_training_video_by_category(category)
 
-            logger.error(
-                f'VIDEO_FILE_NOT_FOUND | path={video_path}'
+        if not video:
+            logger.warning(
+                f"VIDEO_NOT_FOUND | user={employee_id} | category={category}"
             )
 
             send_text(
                 sender,
-                '❌ Health insurance video is not available right now.'
+                f"❌ {category} video is not available."
             )
             return
 
-        # Send video to WhatsApp
-        send_video(sender, video_path)
+        title, s3_key = video
 
         logger.info(
-            f'HEALTH_INSURANCE_VIDEO_SENT | user={employee_id}'
+            f"VIDEO_FOUND | user={employee_id} | key={s3_key}"
+        )
+
+        # ----------------------------
+        # Generate S3 URL
+        # ----------------------------
+        video_url = generate_presigned_url(s3_key)
+
+        logger.info(
+            f"VIDEO_URL_GENERATED | user={employee_id}"
+        )
+
+        # ----------------------------
+        # Send WhatsApp video
+        # ----------------------------
+        send_video(
+            sender,
+            video_url,
+            caption=f"📹 {title}"
+        )
+
+        logger.info(
+            f"TRAINING_VIDEO_SENT | user={employee_id} | category={category}"
         )
 
     except Exception:
-
         logger.exception(
-            f'HEALTH_INSURANCE_VIDEO_ERROR | user={employee_id}'
+            f"TRAINING_VIDEO_ERROR | user={employee_id}"
         )
 
         send_text(
             sender,
-            '❌ Error sending insurance video.'
+            "❌ Error sending training video."
         )
-
-
 
 def handle_salary_slip(employee, message):
     sender = employee["whatsapp"]

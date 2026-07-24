@@ -190,8 +190,8 @@ def router(employee, message):
         elif intent == "salary_slip":
             handle_salary_slip(employee, message)
 
-        elif intent == "health_insurance_video":
-            handle_health_insurance_video(employee, message)
+        elif intent == "training_video":
+            handle_training_video(employee, message)
 
         elif intent == "leave_history":
             handle_leave_history(employee)

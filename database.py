@@ -421,7 +421,7 @@ def save_salary_slip(employee_id: int, month: int, year: int, file_path: str) ->
     finally:
         # Always close connection to prevent leaking resources
         conn.close()
-        
+
 def get_leave_history(employee_id):
 
     conn = get_connection()
@@ -876,3 +876,76 @@ def get_salary_slip_by_month(employee_id, month, year=None):
     conn.close()
 
     return row[2] if row else None
+
+def save_training_video(title, description, s3_key):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    INSERT INTO training_videos
+    (
+        title,
+        description,
+        s3_key
+    )
+    VALUES (?,?,?)
+    """, (
+        title,
+        description,
+        s3_key
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def get_training_video(title):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    SELECT *
+    FROM training_videos
+    WHERE LOWER(title)=LOWER(?)
+    LIMIT 1
+    """, (title,))
+
+    row = cursor.fetchone()
+
+    conn.close()
+
+    return row
+
+
+def get_all_training_videos():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    SELECT *
+    FROM training_videos
+    ORDER BY uploaded_at DESC
+    """)
+
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    return rows
+
+def get_training_video_by_category(category):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT *
+        FROM training_videos
+        WHERE LOWER(category)=LOWER(?)
+        ORDER BY uploaded_at DESC
+        LIMIT 1
+    """, (category,))
+
+    row = cursor.fetchone()
+    conn.close()
+
+    return row

@@ -37,13 +37,20 @@ def classify_intent(message: str):
 
     # Health Insurance
     if any(k in msg for k in [
-        "claim process",
-        "claim health insurance",
-        "approove health insurance",
-        "clain health policy"
-        "how to claim"
+        "video",
+    "training",
+    "induction",
+    "health insurance",
+    "insurance",
+    "insurance claim",
+    "claim process",
+    "claim video",
+    "health video",
+    "safety",
+    "orientation",
+    "onboarding"
     ]):
-        return "health_insurance_video"
+        return  "training_video"
 
     # Leave Application
     if "leave" in msg and any(word in msg for word in [

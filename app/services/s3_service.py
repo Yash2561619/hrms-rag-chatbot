@@ -26,6 +26,19 @@ def upload_salary_to_s3(file_obj, filename):
     return key
 
 
+def upload_video_to_s3(file_obj, filename):
+    key = f"training_videos/{uuid4()}_{filename}"
+
+    s3.upload_fileobj(
+        file_obj,
+        BUCKET,
+        key,
+        ExtraArgs={
+            "ContentType": "video/mp4"
+        }
+    )
+
+    return key
 def generate_download_url(key, expires=3600):
     return s3.generate_presigned_url(
         'get_object',

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="container mt-4">
+
+    <h2>Upload Training Video</h2>
+
+    <form method="POST" enctype="multipart/form-data">
+
+        <div class="mb-3">
+            <label>Video Title</label>
+            <input
+                type="text"
+                name="title"
+                class="form-control"
+                required>
+        </div>
+
+        <div class="mb-3">
+            <label>Category</label>
+
+            <select
+                name="category"
+                class="form-control"
+                required>
+
+                <option value="Induction">Induction</option>
+                <option value="Safety">Safety</option>
+                <option value="HR Policy">HR Policy</option>
+                <option value="Training">Training</option>
+
+            </select>
+        </div>
+
+        <div class="mb-3">
+            <label>Video (MP4)</label>
+
+            <input
+                type="file"
+                name="video"
+                accept=".mp4"
+                class="form-control"
+                required>
+        </div>
+
+        <button
+            class="btn btn-primary"
+            type="submit">
+
+            Upload Video
+
+        </button>
+
+    </form>
+
+</div>
+
+{% endblock %}

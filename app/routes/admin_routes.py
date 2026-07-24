@@ -43,6 +43,11 @@ from validators import validate_phone, ValidationError
 
 # WhatsApp service
 from app.services.whatsapp_service import send_text
+from database import (
+    save_training_video,
+    get_all_training_videos
+)
+from app.services.s3_service import upload_video_to_s3
 
 # Chroma rebuild
 
@@ -653,7 +658,7 @@ def upload_salary():
                month = int(month)
             else:
                month = month_map[month]
-               
+
             if 'salary_pdf' not in request.files:
                 flash('❌ No file selected')
                 return redirect(url_for('admin.upload_salary'))
@@ -880,4 +885,39 @@ def delete_salary_route(id):
     conn.close()
 
     return redirect(url_for('admin.upload_salary'))
- 
+
+
+@admin_bp.route("/upload-video", methods=["GET", "POST"])
+@login_required
+def upload_video():
+
+    if request.method == "POST":
+
+        title = request.form.get("title")
+        category = request.form.get("category")
+
+        file = request.files["video"]
+
+        if file.filename == "":
+            flash("Select a video")
+            return redirect(request.url)
+
+        filename = secure_filename(file.filename)
+
+        s3_key = upload_video_to_s3(file, filename)
+
+        save_training_video(
+            title=title,
+            category=category,
+            s3_key=s3_key
+        )
+
+        flash("✅ Video uploaded successfully")
+        return redirect(url_for("admin.upload_video"))
+
+    videos = get_all_training_videos()
+
+    return render_template(
+        "upload_video.html",
+        videos=videos
+    )

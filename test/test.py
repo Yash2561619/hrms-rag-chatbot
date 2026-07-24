@@ -76,18 +76,28 @@
 # conn.close()
 
 
+# import sqlite3
+
+# conn = sqlite3.connect('data/employee.db')
+# cursor = conn.cursor()
+
+# cursor.execute("""
+# UPDATE salary_slips
+# SET file_path = 'uploads/salary_slips/EMP001_June_2026.pdf'
+# WHERE employee_id = 'EMP001'
+# """)
+
+# conn.commit()
+# conn.close()
+
+# print('Salary path updated')
+
 import sqlite3
 
-conn = sqlite3.connect('data/employee.db')
+conn = sqlite3.connect("data/employee.db")
 cursor = conn.cursor()
 
-cursor.execute("""
-UPDATE salary_slips
-SET file_path = 'uploads/salary_slips/EMP001_June_2026.pdf'
-WHERE employee_id = 'EMP001'
-""")
+cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+print(cursor.fetchall())
 
-conn.commit()
 conn.close()
-
-print('Salary path updated')

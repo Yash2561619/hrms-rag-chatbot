@@ -906,11 +906,19 @@ def upload_video():
 
         s3_key = upload_video_to_s3(file, filename)
 
+        print("=" * 50)
+        print("TITLE:", title)
+        print("CATEGORY:", category)
+        print("S3 KEY:", s3_key)
+        print("=" * 50)
+
         save_training_video(
             title=title,
             category=category,
             s3_key=s3_key
         )
+        logger.info("VIDEO_SAVED_IN_DATABASE")
+        print("SAVE FUNCTION COMPLETED")
 
         flash("✅ Video uploaded successfully")
         return redirect(url_for("admin.upload_video"))

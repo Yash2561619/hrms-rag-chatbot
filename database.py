@@ -881,6 +881,11 @@ def save_training_video(title, category, s3_key):
     conn = get_connection()
     cursor = conn.cursor()
 
+    print("INSERTING INTO DATABASE...")
+    print(title)
+    print(category)
+    print(s3_key)
+
     cursor.execute("""
         INSERT INTO training_videos
         (
@@ -896,8 +901,12 @@ def save_training_video(title, category, s3_key):
     ))
 
     conn.commit()
+
+    print("ROWS INSERTED:", cursor.rowcount)
+
     conn.close()
 
+    print("DATABASE CLOSED")
 
 def get_training_video(title):
     conn = get_connection()

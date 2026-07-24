@@ -1,4 +1,4 @@
-# from database import get_connection
+
 
 # conn = get_connection()
 # cursor = conn.cursor()
@@ -92,12 +92,47 @@
 
 # print('Salary path updated')
 
-import sqlite3
+# import sqlite3
 
-conn = sqlite3.connect("data/employee.db")
+# conn = sqlite3.connect("data/employee.db")
+# cursor = conn.cursor()
+
+# cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+# print(cursor.fetchall())
+
+# conn.close()
+
+# import sqlite3
+
+# conn = sqlite3.connect("data/employee.db")
+# cursor = conn.cursor()
+
+# cursor.execute("""
+# SELECT COUNT(*) FROM training_videos
+# """)
+
+# print(cursor.fetchall())
+
+# conn.close()
+
+import sys
+import os
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+from database import get_connection
+
+conn = get_connection()
 cursor = conn.cursor()
 
-cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+cursor.execute("PRAGMA database_list")
+print(cursor.fetchall())
+
+cursor.execute("SELECT COUNT(*) FROM training_videos")
+print(cursor.fetchone())
+
+cursor.execute("SELECT * FROM training_videos")
 print(cursor.fetchall())
 
 conn.close()

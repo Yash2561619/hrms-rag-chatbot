@@ -877,21 +877,21 @@ def get_salary_slip_by_month(employee_id, month, year=None):
 
     return row[2] if row else None
 
-def save_training_video(title, description, s3_key):
+def save_training_video(title, category, s3_key):
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-    INSERT INTO training_videos
-    (
-        title,
-        description,
-        s3_key
-    )
-    VALUES (?,?,?)
+        INSERT INTO training_videos
+        (
+            title,
+            category,
+            s3_key
+        )
+        VALUES (?, ?, ?)
     """, (
         title,
-        description,
+        category,
         s3_key
     ))
 

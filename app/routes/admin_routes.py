@@ -862,33 +862,30 @@ def delete_salary_route(id):
 
     row = cursor.fetchone()
 
-    if row:
-
-        filepath = row[0]
-
-        s3_key = row[0]
-
-        delete_file_from_s3(s3_key)
-
-        cursor.execute("""
-            DELETE FROM salary_slips
-            WHERE id=?
-        """, (id,))
-
-        conn.commit()
-
-        flash("✅ Salary slip deleted successfully!")
-
-        log_activity(f"🗑 Deleted salary slip ID {id}")
-
-    else:
-
+    if not row:
+        conn.close()
         flash("❌ Salary slip not found.")
+        return redirect(url_for("admin.upload_salary"))
 
+    s3_key = row[0]
+
+    # Delete file from S3
+    delete_file_from_s3(s3_key)
+
+    # Delete database record
+    cursor.execute("""
+        DELETE FROM salary_slips
+        WHERE id=?
+    """, (id,))
+
+    conn.commit()
     conn.close()
 
-    return redirect(url_for('admin.upload_salary'))
+    flash("✅ Salary slip deleted successfully!")
 
+    log_activity(f"Deleted salary slip: {s3_key}")
+
+    return redirect(url_for("admin.upload_salary"))
 
 @admin_bp.route("/upload-video", methods=["GET", "POST"])
 @login_required

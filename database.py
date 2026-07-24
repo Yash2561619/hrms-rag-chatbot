@@ -421,6 +421,7 @@ def save_salary_slip(employee_id: int, month: int, year: int, file_path: str) ->
     finally:
         # Always close connection to prevent leaking resources
         conn.close()
+        
 def get_leave_history(employee_id):
 
     conn = get_connection()

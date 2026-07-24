@@ -100,11 +100,11 @@ def handle_salary_slip(employee, message):
         msg = message.lower()
 
         for key, value in months_map.items():
-            if re.search(rf'\\b{key}\\b', msg):
+            if re.search(rf'\b{key}\b', msg):
                 month = value
                 break
 
-        year_match = re.search(r'\b(20\\d{2})\b', msg)
+        year_match = re.search(r'\b(20\d{2})\b', msg)
         if year_match:
             year = int(year_match.group(1))
 
@@ -150,11 +150,8 @@ def handle_salary_slip(employee, message):
                 f'S3_SALARY_PATH | user={employee_id} | key={path}'
             )
 
-            from app.services.s3_service import generate_presigned_url
 
-            s3_url = generate_presigned_url(path)
-
-            send_document(sender, s3_url, caption)
+            send_document(sender, path, caption)
 
         # ==============================
         # LOCAL FILE

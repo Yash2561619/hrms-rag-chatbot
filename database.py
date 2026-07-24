@@ -936,11 +936,11 @@ def get_training_video_by_category(category):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT *
-        FROM training_videos
-        WHERE LOWER(category)=LOWER(?)
-        ORDER BY uploaded_at DESC
-        LIMIT 1
+    SELECT title, s3_key
+    FROM training_videos
+    WHERE LOWER(category)=LOWER(?)
+    ORDER BY uploaded_at DESC
+    LIMIT 1
     """, (category,))
 
     row = cursor.fetchone()

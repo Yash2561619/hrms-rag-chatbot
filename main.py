@@ -34,7 +34,7 @@ from app.services.leave_service import (
 )
 from app.services.media_service import (
     handle_salary_slip,
-    handle_health_insurance_video
+    handle_training_video,
 )
 
 os.makedirs('logs', exist_ok=True)

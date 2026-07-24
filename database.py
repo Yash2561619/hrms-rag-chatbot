@@ -705,7 +705,7 @@ def get_all_salary_slips():
         FROM salary_slips s
         JOIN employees e
             ON s.employee_id = e.employee_id
-        ORDER BY s.year DESC, s.month DESC
+        ORDER BY s.year DESC, s.month DESC, e.name
     """)
 
     rows = cursor.fetchall()
@@ -715,19 +715,12 @@ def get_all_salary_slips():
     salary_slips = []
 
     for row in rows:
-
         salary_slips.append({
-
             "id": row[0],
-
             "employee_name": row[1],
-
             "month": row[2],
-
             "year": row[3],
-
             "file_path": row[4]
-
         })
 
     return salary_slips

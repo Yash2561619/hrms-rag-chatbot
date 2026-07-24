@@ -48,7 +48,8 @@ from database import (
     get_all_training_videos
 )
 from app.services.s3_service import upload_video_to_s3
-
+from app.services.s3_service import generate_presigned_url
+from app.services.s3_service import delete_file_from_s3
 # Chroma rebuild
 
 
@@ -817,32 +818,33 @@ def view_policy(filename):
         filename
     )
 
-@admin_bp.route('/view-salary/<int:id>')
+@admin_bp.route("/view-salary/<int:id>")
 @login_required
 def view_salary_route(id):
 
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute(
-        'SELECT file_path FROM salary_slips WHERE id=?',
-        (id,)
-    )
+    cursor.execute("""
+        SELECT file_path
+        FROM salary_slips
+        WHERE id=?
+    """, (id,))
 
     row = cursor.fetchone()
     conn.close()
 
     if not row:
-        flash('Salary slip not found.')
-        return redirect(url_for('admin.upload_salary'))
+        flash("❌ Salary slip not found.")
+        return redirect(url_for("admin.upload_salary"))
 
-    filepath = row[0]
+    s3_key = row[0]
 
-    return send_file(
-        filepath,
-        mimetype='application/pdf'
-    )
+    # Generate temporary S3 URL
+    url = generate_presigned_url(s3_key)
 
+    # Open PDF directly from S3
+    return redirect(url)
 
 
 @admin_bp.route("/delete-salary/<int:id>")
@@ -864,8 +866,9 @@ def delete_salary_route(id):
 
         filepath = row[0]
 
-        if os.path.exists(filepath):
-            os.remove(filepath)
+        s3_key = row[0]
+
+        delete_file_from_s3(s3_key)
 
         cursor.execute("""
             DELETE FROM salary_slips

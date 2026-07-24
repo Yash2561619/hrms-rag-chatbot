@@ -57,6 +57,7 @@ def handle_training_video(employee, message):
         ]):
             category = "Induction"
 
+
         else:
             send_text(
                 sender,

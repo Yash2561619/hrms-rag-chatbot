@@ -121,16 +121,20 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-from database import get_connection
+# from database import get_connection
 
-conn = get_connection()
-cursor = conn.cursor()
+# conn = get_connection()
+# cursor = conn.cursor()
 
-cursor.execute("""
-SELECT title, category, s3_key
-FROM training_videos
-""")
+# cursor.execute("""
+# SELECT title, category, s3_key
+# FROM training_videos
+# """)
 
-print(cursor.fetchall())
+# print(cursor.fetchall())
 
-conn.close()
+# conn.close()
+
+from database import get_all_salary_slips
+
+print(get_all_salary_slips())

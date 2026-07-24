@@ -58,3 +58,21 @@ def generate_presigned_url(s3_key, expires=3600):
         },
         ExpiresIn=expires
     )
+
+def delete_file_from_s3(s3_key):
+    """
+    Delete a file from S3.
+    """
+
+    try:
+
+        s3.delete_object(
+            Bucket=BUCKET,
+            Key=s3_key
+        )
+
+        return True
+
+    except Exception:
+
+        return False

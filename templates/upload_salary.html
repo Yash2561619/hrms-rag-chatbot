@@ -192,8 +192,7 @@
 
                         <hr>
 
-                        <div class="d-flex justify-content-end">
-<div class="d-flex justify-content-end"></div>
+<div class="d-flex justify-content-end">
 
     <div class="dropdown">
 
@@ -203,7 +202,6 @@
             data-bs-toggle="dropdown">
 
             <i class="bi bi-gear-fill me-1"></i>
-
             Operate
 
         </button>
@@ -211,35 +209,29 @@
         <ul class="dropdown-menu dropdown-menu-end">
 
             <li>
-
                 <a
                     class="dropdown-item"
                     href="{{ url_for('admin.view_salary_route', id=slip.id) }}"
                     target="_blank">
 
                     <i class="bi bi-eye-fill text-primary me-2"></i>
-
                     View
 
                 </a>
-
             </li>
 
             <li><hr class="dropdown-divider"></li>
 
             <li>
-
                 <a
                     class="dropdown-item text-danger"
                     href="{{ url_for('admin.delete_salary_route', id=slip.id) }}"
                     onclick="return confirm('Delete this salary slip?')">
 
                     <i class="bi bi-trash-fill me-2"></i>
-
                     Delete
 
                 </a>
-
             </li>
 
         </ul>
@@ -247,7 +239,6 @@
     </div>
 
 </div>
-
                     </div>
 
                 </div>

@@ -126,13 +126,11 @@ from database import get_connection
 conn = get_connection()
 cursor = conn.cursor()
 
-cursor.execute("PRAGMA database_list")
-print(cursor.fetchall())
+cursor.execute("""
+SELECT title, category, s3_key
+FROM training_videos
+""")
 
-cursor.execute("SELECT COUNT(*) FROM training_videos")
-print(cursor.fetchone())
-
-cursor.execute("SELECT * FROM training_videos")
 print(cursor.fetchall())
 
 conn.close()

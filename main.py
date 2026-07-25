@@ -191,7 +191,7 @@ def router(employee, message):
         # ===============================
 
         if intent == "rag":
-            handle_rag_query(employee, message, collection, gemini_client)
+            handle_rag_query(employee, message, collection, gemini_client, reranker)
 
         elif intent == "leave_balance":
             handle_leave_balance(employee)

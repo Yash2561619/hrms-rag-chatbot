@@ -99,17 +99,9 @@ reranker = None
 
 
 
-from FlagEmbedding import FlagReranker
 
-def init_reranker():
-    global reranker
 
-    if reranker is None:
-        reranker = FlagReranker(
-            "BAAI/bge-reranker-base",
-            use_fp16=False
-        )
-        logger.info("BGE Reranker initialized")
+
 
 
 def init_gemini():

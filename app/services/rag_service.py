@@ -23,7 +23,6 @@ def handle_rag_query(
     message: str,
     collection: Any,
     gemini_client: Any,
-    reranker: Any,
 ) -> None:
 
     
@@ -59,10 +58,9 @@ def handle_rag_query(
         # 2. INTENT CLASSIFICATION
         # =====================================================
 
-        intent = classify_intent(message)
         logger.info(
-            f"RAG_INTENT | user={employee_id} | intent={intent}"
-        )
+          f"RAG_QUERY | user={employee_id}"
+)
         
 
         # =====================================================
@@ -176,18 +174,12 @@ def handle_rag_query(
         documents = results["documents"][0]
         metadatas = results["metadatas"][0]
 
-        pairs = [[message, doc] for doc in documents]
-        scores = reranker.compute_score(pairs)
-
-        ranked = sorted(
-            zip(scores, documents, metadatas),
-            key=lambda x: x[0],
-            reverse=True,
-        )
+        
+        
 
         # Select top 3 re-ranked chunks
-        top_docs = [doc for _, doc, _ in ranked[:3]]
-        top_metadata = [meta for _, _, meta in ranked[:3]]
+        top_docs = documents[:3]
+        top_metadata = metadatas[:3]
 
         context = "\n\n".join(top_docs)
         results["metadatas"][0] = top_metadata

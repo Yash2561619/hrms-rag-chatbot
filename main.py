@@ -95,7 +95,7 @@ logger.info('Configuration loaded successfully')
 # Global objects initialized at startup
 collection = None
 gemini_client = None
-reranker = None
+
 
 
 
@@ -183,17 +183,12 @@ def router(employee, message):
         # ===============================
 
         if intent == "rag":
-           global reranker
-
-           if reranker is None:
-              init_reranker()
-
-           handle_rag_query(
+            handle_rag_query(
               employee,
               message,
               collection,
               gemini_client,
-              reranker
+             
     )
 
         elif intent == "leave_balance":

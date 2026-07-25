@@ -1,7 +1,7 @@
 import os
 import time
 import logging
-from typing import Optional, Any, Dict
+from typing import  Any, Dict
 
 from config import Config
 from database import log_activity
@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 POLICY_FOLDER = Config.POLICY_FOLDER
 
 
+
+
 def handle_rag_query(
     employee: Dict[str, Any],
     message: str,
@@ -23,6 +25,8 @@ def handle_rag_query(
     gemini_client: Any,
     reranker: Any,
 ) -> None:
+
+    
     sender = employee["whatsapp"]
     employee_id = employee["employee_id"]
 
@@ -59,7 +63,7 @@ def handle_rag_query(
         logger.info(
             f"RAG_INTENT | user={employee_id} | intent={intent}"
         )
-        target_file = get_target_file(intent)
+        
 
         # =====================================================
         # 3. CHROMA COLLECTION HEALTH CHECK
@@ -97,21 +101,7 @@ def handle_rag_query(
         n_results = min(10, chunk_count)
 
         # Attempt 1: Metadata-filtered search
-        if target_file:
-            try:
-                logger.info(
-                    f"RAG_FILTERED_SEARCH | file={target_file} | n_results={n_results}"
-                )
-                results = collection.query(
-                    query_texts=[message],
-                    where={"source": target_file},
-                    n_results=n_results,
-                    include=["documents", "metadatas", "distances"],
-                )
-            except Exception:
-                logger.warning(
-                    f"RAG_FILTERED_SEARCH_FAILED | file={target_file}"
-                )
+        
 
         # Attempt 2: Global vector search fallback
         if (

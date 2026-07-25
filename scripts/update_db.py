@@ -98,7 +98,7 @@ def build_index():
     print("=" * 80)
 
     ef = SentenceTransformerEmbeddingFunction(
-    model_name="BAAI/bge-base-en-v1.5"
+    model_name="BAAI/bge-small-en-v1.5"
 )
     client = chromadb.PersistentClient(path="chroma_db")
 
@@ -314,7 +314,7 @@ def display_index_status():
 
     if collection is None:
         ef = SentenceTransformerEmbeddingFunction(
-        model_name="BAAI/bge-base-en-v1.5"
+        model_name="BAAI/bge-small-en-v1.5"
 )       
         client = chromadb.PersistentClient(path="chroma_db")
         try:

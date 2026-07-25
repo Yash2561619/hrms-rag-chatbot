@@ -23,7 +23,7 @@ from scripts.update_db import build_index
 
 from app.routes.admin_routes import admin_bp
 from app.services.rag_service import handle_rag_query
-from app.services import leave_service
+
 from app.services.intent_service import classify_intent
 from app.services.whatsapp_service import configure, mark_read, send_text
 from app.services.leave_service import (
@@ -98,18 +98,18 @@ gemini_client = None
 reranker = None
 
 
-from sentence_transformers import CrossEncoder
+
 from FlagEmbedding import FlagReranker
 
 def init_reranker():
     global reranker
 
-    reranker = FlagReranker(
-        "BAAI/bge-reranker-base",
-        use_fp16=False
-    )
-
-    logger.info("BGE Reranker initialized")
+    if reranker is None:
+        reranker = FlagReranker(
+            "BAAI/bge-reranker-base",
+            use_fp16=False
+        )
+        logger.info("BGE Reranker initialized")
 
 
 def init_gemini():
@@ -130,7 +130,7 @@ def init_chroma():
 
     try:
         ef = SentenceTransformerEmbeddingFunction(
-            model_name="BAAI/bge-base-en-v1.5"
+            model_name="BAAI/bge-small-en-v1.5"
         )
 
         client = chromadb.PersistentClient(path="chroma_db")
@@ -191,7 +191,18 @@ def router(employee, message):
         # ===============================
 
         if intent == "rag":
-            handle_rag_query(employee, message, collection, gemini_client, reranker)
+           global reranker
+
+           if reranker is None:
+              init_reranker()
+
+           handle_rag_query(
+              employee,
+              message,
+              collection,
+              gemini_client,
+              reranker
+    )
 
         elif intent == "leave_balance":
             handle_leave_balance(employee)
@@ -387,11 +398,9 @@ initialize_database()
 
 init_gemini()
 
-build_index()
-
 init_chroma()
 
-init_reranker()
+
 
 logger.info("APPLICATION_STARTUP_COMPLETE")
 

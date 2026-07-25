@@ -940,3 +940,34 @@ def get_training_video_by_category(category):
     conn.close()
 
     return row
+
+
+def save_policy_file(file_name, s3_key, version, file_hash):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT OR REPLACE INTO policy_files
+        (file_name, s3_key, version, file_hash)
+        VALUES (?, ?, ?, ?)
+    """, (file_name, s3_key, version, file_hash))
+
+    conn.commit()
+    conn.close()
+
+def get_all_policy_files():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT file_name,
+               s3_key,
+               version,
+               file_hash
+        FROM policy_files
+    """)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return rows

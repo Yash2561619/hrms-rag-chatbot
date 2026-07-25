@@ -1,6 +1,8 @@
 import os
 import boto3
 from uuid import uuid4
+import tempfile
+
 
 s3 = boto3.client(
     's3',
@@ -76,3 +78,31 @@ def delete_file_from_s3(s3_key):
     except Exception:
 
         return False
+
+def download_policy_temp(s3_key):
+    filename = os.path.basename(s3_key)
+
+    temp_path = os.path.join(
+        tempfile.gettempdir(),
+        filename
+    )
+
+    s3.download_file(
+        BUCKET,
+        s3_key,
+        temp_path
+    )
+
+    return temp_path
+
+def upload_policy_to_s3(file, filename):
+    s3_key = f"policies/{filename}"
+
+    s3.upload_fileobj(
+        file,
+        BUCKET,
+        s3_key,
+        ExtraArgs={"ContentType": "application/pdf"},
+    )
+
+    return s3_key

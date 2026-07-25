@@ -17,11 +17,16 @@ from typing import Optional
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 import chromadb
-from chromadb.utils import embedding_functions
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from database import get_all_policy_files
 
 from config import Config
 from scripts.step1_extract import extract_text_from_pdf
+from app.services.s3_service import (
+    
+    download_policy_temp
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,14 +97,23 @@ def build_index():
     print("Building HR Policy Knowledge Base with Versioning")
     print("=" * 80)
 
+    ef = SentenceTransformerEmbeddingFunction(
+    model_name="BAAI/bge-base-en-v1.5"
+)
     client = chromadb.PersistentClient(path="chroma_db")
 
     # Get or create collection
     try:
-        collection = client.get_collection("hr_policies")
+        collection = client.get_collection(
+           "hr_policies",
+           embedding_function=ef
+)
         print("[INFO] Using existing collection (preserving old chunks)")
     except Exception:
-        collection = client.create_collection("hr_policies")
+        collection = client.create_collection(
+          "hr_policies",
+           embedding_function=ef
+)
         print("[INFO] Created new collection")
 
     splitter = RecursiveCharacterTextSplitter(
@@ -115,14 +129,24 @@ def build_index():
         print(f"[ERROR] Policy folder '{POLICY_FOLDER}' does not exist.")
         return
 
-    current_pdfs = {
-        f: get_pdf_hash(os.path.join(POLICY_FOLDER, f))
-        for f in os.listdir(POLICY_FOLDER)
-        if f.lower().endswith(".pdf")
-    }
     registry = load_pdf_registry()
 
-    print(f"\n[INFO] Current PDFs in folder: {len(current_pdfs)}")
+    current_pdfs = {}
+    policy_records = {}
+
+    rows = get_all_policy_files()
+
+    for file_name, s3_key, version, file_hash in rows:
+        current_pdfs[file_name] = file_hash
+
+        policy_records[file_name] = {
+           "s3_key": s3_key,
+           "version": version,
+           "hash": file_hash
+    }
+
+    print(f"\n[INFO] Current PDFs in database: {len(current_pdfs)}")
+
     for pdf in current_pdfs:
         print(f"  • {pdf}")
 
@@ -196,7 +220,8 @@ def build_index():
 
     # Process required PDFs
     for filename in pdfs_to_process:
-        filepath = os.path.join(POLICY_FOLDER, filename)
+        s3_key = policy_records[filename]["s3_key"]
+        filepath = download_policy_temp(s3_key)
         print(f'\n[INFO] Processing: {filename}')
 
         try:
@@ -288,9 +313,15 @@ def display_index_status():
     global collection
 
     if collection is None:
+        ef = SentenceTransformerEmbeddingFunction(
+        model_name="BAAI/bge-base-en-v1.5"
+)       
         client = chromadb.PersistentClient(path="chroma_db")
         try:
-            collection = client.get_collection("hr_policies")
+           collection = client.create_collection(
+           "hr_policies",
+           embedding_function=ef
+        )
         except Exception:
             print("[ERROR] Collection not initialized or empty")
             return

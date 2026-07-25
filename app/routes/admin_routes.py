@@ -17,6 +17,7 @@ from flask import (
 from werkzeug.utils import secure_filename
 from functools import wraps
 from app.services.auth_service import authenticate_admin
+from database import save_policy_file
 # Database functions
 from database import (
     get_dashboard_stats,
@@ -736,13 +737,24 @@ def policy_management():
             return redirect(url_for('admin.policy_management'))
 
         try:
-            filename = secure_filename(file.filename)
-            filepath = os.path.join(POLICY_FOLDER, filename)
-            file.save(filepath)
+            from app.services.s3_service import upload_policy_to_s3
 
+            filename = secure_filename(file.filename)
+
+# Upload PDF directly to S3
+            s3_key = upload_policy_to_s3(file, filename)
+            from scripts.utils import get_pdf_hash, get_pdf_version
+
+            save_policy_file(
+              file_name=filename,
+              s3_key=s3_key,
+              version=get_pdf_version(filename),
+              file_hash=get_pdf_hash(filepath)
+)
+            logger.info(f"POLICY_UPLOADED_TO_S3 | key={s3_key}")
             from scripts.update_db import build_index
-            # Rebuild index
             build_index()
+
 
             log_activity(f'📚 Policy uploaded: {filename}')
             flash('✅ Policy uploaded and indexed successfully!')
@@ -781,7 +793,13 @@ def delete_policy(filename):
             flash('❌ File not found')
             return redirect(url_for('admin.policy_management'))
 
-        os.remove(filepath)
+        from app.services.s3_service import delete_file_from_s3
+
+        s3_key = f"policies/{filename}"
+
+        delete_file_from_s3(s3_key)
+
+        logger.info(f"POLICY_DELETED_FROM_S3 | key={s3_key}")
 
         from scripts.update_db import build_index
 
@@ -802,22 +820,21 @@ def delete_policy(filename):
 @login_required
 def download_policy(filename):
 
-    return send_from_directory(
-        current_app.config['POLICY_FOLDER'],
-        filename,
-        as_attachment=True
-    )
+    s3_key = f"policies/{filename}"
 
+    url = generate_presigned_url(s3_key)
+
+    return redirect(url)
 
 @admin_bp.route("/view-policy/<filename>")
 @login_required
 def view_policy(filename):
 
-    return send_from_directory(
-        current_app.config['POLICY_FOLDER'],
-        filename
-    )
+    s3_key = f"policies/{filename}"
 
+    url = generate_presigned_url(s3_key)
+
+    return redirect(url)
 @admin_bp.route("/view-salary/<int:id>")
 @login_required
 def view_salary_route(id):

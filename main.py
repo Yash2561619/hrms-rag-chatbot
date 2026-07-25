@@ -11,7 +11,7 @@ import logging
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 import chromadb
-from chromadb.utils import embedding_functions
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 import google.genai as genai
 from flask import Flask, request, send_from_directory
 
@@ -95,6 +95,21 @@ logger.info('Configuration loaded successfully')
 # Global objects initialized at startup
 collection = None
 gemini_client = None
+reranker = None
+
+
+from sentence_transformers import CrossEncoder
+from FlagEmbedding import FlagReranker
+
+def init_reranker():
+    global reranker
+
+    reranker = FlagReranker(
+        "BAAI/bge-reranker-base",
+        use_fp16=False
+    )
+
+    logger.info("BGE Reranker initialized")
 
 
 def init_gemini():
@@ -109,34 +124,31 @@ def init_gemini():
 
 
 def init_chroma():
-    """Initialize persistent Chroma collection used by the whole app."""
+    """Initialize persistent Chroma collection."""
+
     global collection
 
     try:
-        ef = embedding_functions.DefaultEmbeddingFunction()
+        ef = SentenceTransformerEmbeddingFunction(
+            model_name="BAAI/bge-base-en-v1.5"
+        )
 
-        # SAME PATH as update_db.py
-        client = chromadb.PersistentClient(path='chroma_db')
+        client = chromadb.PersistentClient(path="chroma_db")
 
-        # IMPORTANT: do NOT create a new collection
         collection = client.get_or_create_collection(
-            name='hr_policies',
+            name="hr_policies",
             embedding_function=ef
         )
 
         count = collection.count()
 
-        logger.info(f'Chroma initialized | chunks={count}')
-
-        if count == 0:
-            logger.warning(
-                'Knowledge base is empty. Run: python -m scripts.update_db'
-            )
+        logger.info(
+            f"Chroma initialized | chunks={count}"
+        )
 
     except Exception:
-        logger.exception('CHROMA_INIT_ERROR')
+        logger.exception("CHROMA_INIT_ERROR")
         collection = None
-
 
 def router(employee, message):
     intent = classify_intent(message)
@@ -374,7 +386,9 @@ if __name__ == '__main__':
 
     build_index()
 
-    init_chroma()   # MUST come AFTER build_index()
+    init_chroma() 
+
+    init_reranker()  # MUST come AFTER build_index()
 
     logger.info('APPLICATION_STARTUP_COMPLETE')
 

@@ -174,6 +174,26 @@ CREATE TABLE IF NOT EXISTS training_videos (
     uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """)
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS policy_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    file_name TEXT NOT NULL UNIQUE,
+
+    s3_key TEXT NOT NULL,
+
+    version TEXT NOT NULL,
+
+    file_hash TEXT NOT NULL,
+
+    upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    status TEXT DEFAULT 'active'
+)
+""")
+
+
 # =====================================================
 # Save Changes
 # =====================================================

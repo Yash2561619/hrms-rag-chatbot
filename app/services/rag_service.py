@@ -16,249 +16,213 @@ logger = logging.getLogger(__name__)
 POLICY_FOLDER = Config.POLICY_FOLDER
 
 
-def get_target_file(intent: str) -> Optional[str]:
-    """
-    Dynamically map intent to policy file based on filename keywords.
-    """
-    intent_keywords = {
-        'leave_balance': ['leave', 'vacation', 'absence', 'sick', 'casual', 'annual'],
-        'leave_history': ['leave', 'vacation', 'absence', 'sick', 'casual', 'annual'],
-        'apply_leave': ['leave', 'vacation', 'absence', 'sick', 'casual', 'annual'],
-        'salary_slip': ['salary', 'payroll', 'compensation', 'pay', 'payslip', 'slip'],
-        'health_insurance_video': ['insurance', 'health', 'medical', 'benefits', 'hospital', 'claim'],
-        'travel_policy': ['travel', 'trip', 'flight', 'hotel', 'expense', 'reimbursement'],
-    }
-
-    if not os.path.exists(POLICY_FOLDER):
-        return None
-
-    # Get all PDF files in POLICY_FOLDER
-    pdf_files = [
-        f for f in os.listdir(POLICY_FOLDER)
-        if f.lower().endswith(".pdf")
-    ]
-
-    if not pdf_files:
-        return None  # No policies uploaded
-
-    # Get keywords for this intent
-    keywords = intent_keywords.get(intent, [])
-
-    if not keywords:
-        return None  # Unknown intent
-
-    # Find first PDF that matches any keyword
-    for pdf in pdf_files:
-        pdf_lower = pdf.lower()
-        for keyword in keywords:
-            if keyword in pdf_lower:
-                logger.info(f"Matched intent '{intent}' to file '{pdf}'")
-                return pdf
-
-    # No match found, search all
-    logger.info(f"No specific match for intent '{intent}', searching all policies")
-    return None
-
-
-def handle_rag_query(employee: Dict[str, Any], message: str, collection: Any, gemini_client: Any) -> None:
-    sender = employee['whatsapp']
-    employee_id = employee['employee_id']
+def handle_rag_query(
+    employee: Dict[str, Any],
+    message: str,
+    collection: Any,
+    gemini_client: Any,
+    reranker: Any,
+) -> None:
+    sender = employee["whatsapp"]
+    employee_id = employee["employee_id"]
 
     try:
         logger.info(
-            f'RAG_QUERY_START | user={employee_id} | question={message[:80]}'
+            f"RAG_QUERY_START | user={employee_id} | question={message[:80]}"
         )
 
         # =====================================================
-        # VALIDATION
+        # 1. INPUT VALIDATION
         # =====================================================
 
         if not message or len(message.strip()) < 3:
-            send_text(sender, '⚠️ Please ask a more specific question.')
+            send_text(sender, "⚠️ Please ask a more specific question.")
             return
 
         if collection is None:
-            logger.error('CHROMA_COLLECTION_NONE')
-            send_text(sender, '❌ Knowledge base is not available right now.')
+            logger.error("CHROMA_COLLECTION_NONE")
+            send_text(
+                sender, "❌ Knowledge base is not available right now."
+            )
             return
 
         if gemini_client is None:
-            logger.error('GEMINI_CLIENT_NONE')
-            send_text(sender, '❌ AI service is not available right now.')
+            logger.error("GEMINI_CLIENT_NONE")
+            send_text(sender, "❌ AI service is not available right now.")
             return
 
         # =====================================================
-        # INTENT CLASSIFICATION
+        # 2. INTENT CLASSIFICATION
         # =====================================================
 
         intent = classify_intent(message)
-
         logger.info(
-            f'RAG_INTENT | user={employee_id} | intent={intent}'
+            f"RAG_INTENT | user={employee_id} | intent={intent}"
         )
-
         target_file = get_target_file(intent)
 
         # =====================================================
-        # CHROMA COLLECTION HEALTH CHECK
+        # 3. CHROMA COLLECTION HEALTH CHECK
         # =====================================================
 
         try:
             chunk_count = collection.count()
-
             logger.info(
-                f'RAG_COLLECTION_COUNT | user={employee_id} | chunks={chunk_count}'
+                f"RAG_COLLECTION_COUNT | user={employee_id} | chunks={chunk_count}"
             )
 
             if chunk_count == 0:
                 logger.warning(
-                    f'RAG_EMPTY_COLLECTION | user={employee_id}'
+                    f"RAG_EMPTY_COLLECTION | user={employee_id}"
                 )
-
                 send_text(
                     sender,
-                    '📚 The HR policy knowledge base is currently empty. Please contact the HR administrator.'
+                    "📚 The HR policy knowledge base is currently empty. Please contact the HR administrator.",
                 )
                 return
 
         except Exception:
-            logger.exception('RAG_COLLECTION_CHECK_FAILED')
-
+            logger.exception("RAG_COLLECTION_CHECK_FAILED")
             send_text(
                 sender,
-                '❌ Unable to access the HR knowledge base right now.'
+                "❌ Unable to access the HR knowledge base right now.",
             )
             return
 
         # =====================================================
-        # CHROMA SEARCH WITH SAFE FALLBACK
+        # 4. CHROMA VECTOR SEARCH WITH FALLBACK
         # =====================================================
 
         results = None
-        n_results = min(2, chunk_count)
+        n_results = min(10, chunk_count)
 
-        # Attempt 1: Filtered search
+        # Attempt 1: Metadata-filtered search
         if target_file:
             try:
                 logger.info(
-                    f'RAG_FILTERED_SEARCH | file={target_file} | n_results={n_results}'
+                    f"RAG_FILTERED_SEARCH | file={target_file} | n_results={n_results}"
                 )
-
                 results = collection.query(
                     query_texts=[message],
-                    where={'source': target_file},
+                    where={"source": target_file},
                     n_results=n_results,
-                    include=['documents', 'metadatas', 'distances']
+                    include=["documents", "metadatas", "distances"],
                 )
-
             except Exception:
                 logger.warning(
-                    f'RAG_FILTERED_SEARCH_FAILED | file={target_file}'
+                    f"RAG_FILTERED_SEARCH_FAILED | file={target_file}"
                 )
 
-        # Attempt 2: Global search fallback
+        # Attempt 2: Global vector search fallback
         if (
             not results
-            or 'documents' not in results
-            or not results['documents']
-            or not results['documents'][0]
+            or "documents" not in results
+            or not results["documents"]
+            or not results["documents"][0]
         ):
             try:
                 logger.info(
-                    f'RAG_GLOBAL_SEARCH | n_results={n_results}'
+                    f"RAG_GLOBAL_SEARCH | n_results={n_results}"
                 )
-
                 results = collection.query(
                     query_texts=[message],
                     n_results=n_results,
-                    include=['documents', 'metadatas', 'distances']
+                    include=["documents", "metadatas", "distances"],
                 )
-
             except Exception:
-                logger.exception('CHROMA_QUERY_FAILED')
-
+                logger.exception("CHROMA_QUERY_FAILED")
                 send_text(
                     sender,
-                    '❌ Unable to search HR policies right now.'
+                    "❌ Unable to search HR policies right now.",
                 )
                 return
 
-        # =====================================================
-        # HANDLE NO RESULTS OR EMPTY DOCUMENTS
-        # =====================================================
-
+        # Handle empty document results
         if (
             not results
-            or 'documents' not in results
-            or not results['documents']
-            or not results['documents'][0]
+            or "documents" not in results
+            or not results["documents"]
+            or not results["documents"][0]
         ):
             logger.warning(
-                f'RAG_NO_RESULTS | user={employee_id}'
+                f"RAG_NO_RESULTS | user={employee_id}"
             )
-
             send_text(
                 sender,
-                '📚 I could not find relevant information in the HR policies.'
+                "📚 I could not find relevant information in the HR policies.",
             )
             return
 
         # =====================================================
-        # DISTANCE THRESHOLD CHECK (GUARDRAIL)
+        # 5. DISTANCE THRESHOLD GUARDRAIL
         # =====================================================
 
         try:
-            distances = results.get('distances', [[]])[0]
+            distances = results.get("distances", [[]])[0]
             best_distance = distances[0] if distances else None
 
             logger.info(
-                f'RAG_DISTANCE | user={employee_id} | best={best_distance}'
+                f"RAG_DISTANCE | user={employee_id} | best={best_distance}"
             )
 
-            # Lower distance = better relevance match
+            # High distance indicates low semantic relevance
             if best_distance is None or best_distance > 1.2:
                 logger.warning(
-                    f'RAG_LOW_CONFIDENCE | user={employee_id} | distance={best_distance}'
+                    f"RAG_LOW_CONFIDENCE | user={employee_id} | distance={best_distance}"
                 )
-
                 send_text(
                     sender,
-                    "📚 I couldn't find relevant information in the HR policies."
+                    "📚 I couldn't find relevant information in the HR policies.",
                 )
                 return
 
         except Exception:
-            logger.warning('RAG_DISTANCE_CHECK_SKIPPED')
+            logger.warning("RAG_DISTANCE_CHECK_SKIPPED")
 
         # =====================================================
-        # BUILD CONTEXT
+        # 6. RE-RANKING VIA CROSS-ENCODER
         # =====================================================
 
-        context = '\n\n'.join(results['documents'][0])
+        documents = results["documents"][0]
+        metadatas = results["metadatas"][0]
+
+        pairs = [[message, doc] for doc in documents]
+        scores = reranker.compute_score(pairs)
+
+        ranked = sorted(
+            zip(scores, documents, metadatas),
+            key=lambda x: x[0],
+            reverse=True,
+        )
+
+        # Select top 3 re-ranked chunks
+        top_docs = [doc for _, doc, _ in ranked[:3]]
+        top_metadata = [meta for _, _, meta in ranked[:3]]
+
+        context = "\n\n".join(top_docs)
+        results["metadatas"][0] = top_metadata
 
         # =====================================================
-        # EXTRACT SOURCES
+        # 7. METADATA SOURCE EXTRACTION
         # =====================================================
 
         sources = []
-
-        if results.get('metadatas'):
-            for metadata in results['metadatas'][0]:
+        if results.get("metadatas"):
+            for metadata in results["metadatas"][0]:
                 if metadata:
-                    source = metadata.get('source', 'Unknown Policy')
-
+                    source = metadata.get("source", "Unknown Policy")
                     if source not in sources:
                         sources.append(source)
 
         logger.info(
-            f'RAG_SOURCES | user={employee_id} | count={len(sources)}'
+            f"RAG_SOURCES | user={employee_id} | count={len(sources)}"
         )
 
         # =====================================================
-        # GEMINI PROMPT
+        # 8. PROMPT CONSTRUCT
         # =====================================================
 
-        prompt = f'''
+        prompt = f"""
 You are ApexHR, a professional HR assistant for employees.
 
 INSTRUCTIONS:
@@ -277,10 +241,10 @@ HR POLICY CONTEXT:
 {context}
 
 FINAL ANSWER:
-'''
+"""
 
         # =====================================================
-        # GEMINI GENERATION WITH RETRY
+        # 9. LLM GENERATION WITH RETRY (EXPONENTIAL BACKOFF)
         # =====================================================
 
         response = None
@@ -289,29 +253,26 @@ FINAL ANSWER:
         for attempt in range(3):
             try:
                 logger.info(
-                    f'GEMINI_ATTEMPT | user={employee_id} | attempt={attempt + 1}'
+                    f"GEMINI_ATTEMPT | user={employee_id} | attempt={attempt + 1}"
                 )
 
                 response = gemini_client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model="gemini-2.5-flash",
                     contents=prompt,
                     config={
-                        'temperature': 0.2,
-                        'max_output_tokens': 300
-                    }
+                        "temperature": 0.2,
+                        "max_output_tokens": 300,
+                    },
                 )
 
-                # Success check
                 if response and response.text:
                     break
 
             except ClientError as e:
-
-                # Exponential backoff retry on HTTP 429 Rate Limit Error
-                if '429' in str(e):
-
+                # Handle 429 Rate Limits using exponential backoff
+                if "429" in str(e):
                     logger.warning(
-                        f'GEMINI_429 | user={employee_id} | attempt={attempt + 1} | wait={backoff}s'
+                        f"GEMINI_429 | user={employee_id} | attempt={attempt + 1} | wait={backoff}s"
                     )
 
                     if attempt < 2:
@@ -319,72 +280,62 @@ FINAL ANSWER:
                         backoff *= 2
                         continue
 
-                logger.exception('GEMINI_CLIENT_ERROR')
+                logger.exception("GEMINI_CLIENT_ERROR")
                 response = None
                 break
 
             except Exception:
-                logger.exception('GEMINI_UNKNOWN_ERROR')
+                logger.exception("GEMINI_UNKNOWN_ERROR")
                 response = None
                 break
 
         # =====================================================
-        # PROCESS RESPONSE / FALLBACK
+        # 10. RESPONSE FORMATTING & PAYLOAD TRUNCATION
         # =====================================================
 
         if response and response.text:
             raw_answer = response.text.strip()
-
         else:
-            # Fallback: serve text directly from retrieved context chunk
+            # Fallback to direct raw retrieved context if LLM call fails
             logger.warning(
-                f'GEMINI_FALLBACK_USED | user={employee_id}'
+                f"GEMINI_FALLBACK_USED | user={employee_id}"
             )
-
             fallback_text = context[:600].strip()
-
             raw_answer = (
-                '⚠️ The AI service is temporarily busy, but I found relevant HR policy information:\n\n'
-                f'{fallback_text}'
+                "⚠️ The AI service is temporarily busy, but I found relevant HR policy information:\n\n"
+                f"{fallback_text}"
             )
 
         answer = format_hr_response(raw_answer)
 
-        # Keep WhatsApp payload safe from overflow
+        # Enforce maximum character boundary for WhatsApp payload delivery
         if len(answer) > 1500:
-            answer = answer[:1500] + '\n\n[Message truncated]'
+            answer = answer[:1500] + "\n\n[Message truncated]"
 
-        # =====================================================
-        # ADD SOURCES
-        # =====================================================
-
+        # Format and attach unique source file attributions
         if sources:
-            answer += '\n\n📄 Source Documents:\n'
-
+            answer += "\n\n📄 Source Documents:\n"
             for src in sources:
-                clean_name = src.replace('_', ' ').replace('.pdf', '')
-                answer += f'• {clean_name}\n'
+                clean_name = src.replace("_", " ").replace(".pdf", "")
+                answer += f"• {clean_name}\n"
 
         # =====================================================
-        # SEND RESPONSE
+        # 11. DISPATCH RESPONSE & LOGGING
         # =====================================================
 
         send_text(sender, answer)
-
         log_activity(
-            f'RAG_QUERY | {employee["name"]} | {message[:50]}'
+            f"RAG_QUERY | {employee['name']} | {message[:50]}"
         )
-
         logger.info(
-            f'RAG_QUERY_SUCCESS | user={employee_id}'
+            f"RAG_QUERY_SUCCESS | user={employee_id}"
         )
 
     except Exception:
         logger.exception(
-            f'RAG_FATAL_ERROR | user={employee_id}'
+            f"RAG_FATAL_ERROR | user={employee_id}"
         )
-
         send_text(
             sender,
-            '❌ Sorry, something went wrong while searching the HR policies.'
+            "❌ Sorry, something went wrong while searching the HR policies.",
         )

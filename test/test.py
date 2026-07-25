@@ -115,10 +115,10 @@
 
 # conn.close()
 
-import sys
-import os
+# import sys
+# import os
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 # from database import get_connection
@@ -135,6 +135,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # conn.close()
 
-from database import get_all_salary_slips
+# from database import get_all_salary_slips
 
-print(get_all_salary_slips())
+# print(get_all_salary_slips())
+
+from sentence_transformers import SentenceTransformer
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+print("OK")

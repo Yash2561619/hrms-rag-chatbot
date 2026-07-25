@@ -379,25 +379,29 @@ def serve_video(filename):
 # STARTUP
 # ============================================================================
 
-if __name__ == '__main__':
-    initialize_database()
+# ==========================
+# Application Startup
+# ==========================
 
-    init_gemini()
+initialize_database()
 
-    build_index()
+init_gemini()
 
-    init_chroma() 
+build_index()
 
-    init_reranker()  # MUST come AFTER build_index()
+init_chroma()
 
-    logger.info('APPLICATION_STARTUP_COMPLETE')
+init_reranker()
 
+logger.info("APPLICATION_STARTUP_COMPLETE")
+
+
+if __name__ == "__main__":
     app.run(
-        host='0.0.0.0',
+        host="0.0.0.0",
         port=5000,
         debug=False
     )
-
 
 # cloudflared tunnel --url http://localhost:5000 
 

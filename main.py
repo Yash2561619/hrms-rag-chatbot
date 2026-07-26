@@ -7,6 +7,7 @@ Uses Google Gemini API only (no Anthropic).
 import os
 import sys
 import logging
+import traceback
 
 # Add project root to Python path (Render/Linux fix)
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -112,6 +113,7 @@ def init_gemini():
             logger.info('[STARTUP] ✅ Gemini client initialized')
         except Exception as e:
             logger.error(f'[STARTUP] ❌ Gemini initialization failed: {e}')
+            logger.error(traceback.format_exc())
     else:
         logger.error('[STARTUP] ❌ GEMINI_API_KEY not set')
 
@@ -121,11 +123,6 @@ def init_chroma():
     Initialize persistent Chroma collection with LAZY embedding.
     The embedding model loads on FIRST QUERY, not at startup.
     Saves ~300-400 MB RAM at boot time.
-    
-    This function completes in milliseconds because:
-    - Imports LazyEmbeddingFunction (5 KB)
-    - Creates Chroma client (lightweight)
-    - Does NOT load the 300-400 MB embedding model yet
     """
 
     global collection
@@ -133,36 +130,62 @@ def init_chroma():
     logger.info("[STARTUP] Initializing Chroma with lazy embedding...")
 
     try:
-        # Import lazy wrapper (5 KB, instant)
-        from app.services.lazy_embedding import LazyEmbeddingFunction
+        # Step 1: Import lazy wrapper
+        logger.info("[STARTUP] Step 1: Importing LazyEmbeddingFunction...")
+        try:
+            from app.services.lazy_embedding import LazyEmbeddingFunction
+            logger.info("[STARTUP] ✅ LazyEmbeddingFunction imported successfully")
+        except ImportError as ie:
+            logger.error(f"[STARTUP] ❌ IMPORT_ERROR: Failed to import LazyEmbeddingFunction")
+            logger.error(f"[STARTUP] ImportError details: {ie}")
+            logger.error(f"[STARTUP] Full traceback: {traceback.format_exc()}")
+            raise
         
-        logger.info("[STARTUP] LazyEmbeddingFunction imported")
-        
-        # Create lazy embedding function (does NOT load model yet)
-        ef = LazyEmbeddingFunction(
-            model_name="BAAI/bge-small-en-v1.5"
-        )
+        # Step 2: Create lazy embedding function
+        logger.info("[STARTUP] Step 2: Creating LazyEmbeddingFunction instance...")
+        try:
+            ef = LazyEmbeddingFunction(
+                model_name="BAAI/bge-small-en-v1.5"
+            )
+            logger.info("[STARTUP] ✅ LazyEmbeddingFunction instance created")
+        except Exception as e:
+            logger.error(f"[STARTUP] ❌ Failed to create LazyEmbeddingFunction: {e}")
+            logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
+            raise
 
-        # Initialize Chroma client (lightweight)
-        client = chromadb.PersistentClient(path="chroma_db")
-        logger.info("[STARTUP] ChromaDB client created")
+        # Step 3: Initialize ChromaDB client
+        logger.info("[STARTUP] Step 3: Creating ChromaDB persistent client...")
+        try:
+            client = chromadb.PersistentClient(path="chroma_db")
+            logger.info("[STARTUP] ✅ ChromaDB client created")
+        except Exception as e:
+            logger.error(f"[STARTUP] ❌ Failed to create ChromaDB client: {e}")
+            logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
+            raise
 
-        # Get or create collection (doesn't load embedding model)
-        collection = client.get_or_create_collection(
-            name="hr_policies",
-            embedding_function=ef
-        )
+        # Step 4: Get or create collection
+        logger.info("[STARTUP] Step 4: Getting or creating 'hr_policies' collection...")
+        try:
+            collection = client.get_or_create_collection(
+                name="hr_policies",
+                embedding_function=ef
+            )
+            logger.info("[STARTUP] ✅ Collection 'hr_policies' ready")
+        except Exception as e:
+            logger.error(f"[STARTUP] ❌ Failed to get/create collection: {e}")
+            logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
+            raise
 
         logger.info(
-            "[STARTUP] ✅ Chroma collection ready (lazy embedding will load on first RAG query)"
+            "[STARTUP] ✅✅✅ Chroma collection initialized successfully (lazy embedding will load on first RAG query)"
         )
 
     except ImportError as e:
-        logger.error(f"[STARTUP] ❌ Failed to import LazyEmbeddingFunction: {e}")
-        logger.error("[STARTUP] Make sure app/services/lazy_embedding.py exists!")
+        logger.error(f"[STARTUP] ❌ FINAL: ImportError during Chroma init: {e}")
         collection = None
     except Exception as e:
-        logger.exception("[STARTUP] ❌ CHROMA_INIT_ERROR")
+        logger.error(f"[STARTUP] ❌ FINAL: Exception during Chroma init: {e}")
+        logger.error(f"[STARTUP] Full traceback:\n{traceback.format_exc()}")
         collection = None
 
 
@@ -417,6 +440,7 @@ init_chroma()
 
 logger.info("=" * 80)
 logger.info("APPLICATION_STARTUP_COMPLETE ✅")
+logger.info(f"Collection status: {collection}")
 logger.info("=" * 80)
 
 

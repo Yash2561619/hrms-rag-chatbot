@@ -1,7 +1,7 @@
 import logging
 import os
 from functools import wraps
-
+import threading
 from flask import (
     Blueprint,
     current_app,
@@ -754,15 +754,11 @@ def policy_management():
 
             logger.info(f"POLICY_UPLOADED_TO_S3 | key={s3_key}")
 
-            # Rebuild Chroma vector database
-            build_index()
-
-            # Clean up local temporary file
-            if os.path.exists(temp_filepath):
-                os.remove(temp_filepath)
+            threading.Thread(target=build_index, daemon=True).start()
 
             log_activity(f'📚 Policy uploaded: {filename}')
-            flash('✅ Policy uploaded and indexed successfully!')
+
+            flash('✅ Policy uploaded! Knowledge base is indexing in the background.')
 
             return redirect(url_for('admin.policy_management'))
 

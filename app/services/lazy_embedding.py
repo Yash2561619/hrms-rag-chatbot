@@ -1,16 +1,15 @@
-"""
-app/services/lazy_embedding.py
-"""
+"""app/services/lazy_embedding.py."""
 
 import logging
 import os
 import traceback
+import chromadb
 from google import genai
 
 logger = logging.getLogger(__name__)
 
 
-class LazyEmbeddingFunction:
+class LazyEmbeddingFunction(chromadb.EmbeddingFunction):
 
     def __init__(self, api_key=None, model_name="text-embedding-004"):
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
@@ -19,6 +18,10 @@ class LazyEmbeddingFunction:
         logger.info(
             f"[EMBEDDING] Initialized Gemini Embedding Function with model: {self.model_name}"
         )
+
+    def name(self) -> str:
+        """Required by modern ChromaDB to validate custom embedding functions."""
+        return "lazy_gemini_embedding"
 
     def _ensure_client(self):
         if not self._client:

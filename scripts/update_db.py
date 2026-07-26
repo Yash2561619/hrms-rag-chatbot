@@ -99,7 +99,7 @@ def build_index():
 
     # Get or create collection
     try:
-        collection = client.get_collection(
+        collection = client.get_or_create_collection(
             "hr_policies", embedding_function=ef
         )
         print("[INFO] Using existing collection (preserving old chunks)")

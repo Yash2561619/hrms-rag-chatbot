@@ -5,7 +5,12 @@ Uses Google Gemini API only (no Anthropic).
 """
 
 import os
+import sys
 import logging
+
+# Add project root to Python path (Render/Linux fix)
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, PROJECT_ROOT)
 
 # Disable ChromaDB telemetry before importing chromadb
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -22,7 +27,6 @@ from scripts.update_db import build_index
 
 from app.routes.admin_routes import admin_bp
 from app.services.rag_service import handle_rag_query
-
 from app.services.intent_service import classify_intent
 from app.services.whatsapp_service import configure, mark_read, send_text
 from app.services.leave_service import (
@@ -99,12 +103,17 @@ gemini_client = None
 def init_gemini():
     """Initialize Gemini client at startup."""
     global gemini_client
+    
+    logger.info("[STARTUP] Initializing Gemini client...")
 
     if GEMINI_API_KEY:
-        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        logger.info('Gemini client initialized')
+        try:
+            gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+            logger.info('[STARTUP] ✅ Gemini client initialized')
+        except Exception as e:
+            logger.error(f'[STARTUP] ❌ Gemini initialization failed: {e}')
     else:
-        logger.error('GEMINI_API_KEY not set')
+        logger.error('[STARTUP] ❌ GEMINI_API_KEY not set')
 
 
 def init_chroma():
@@ -112,31 +121,48 @@ def init_chroma():
     Initialize persistent Chroma collection with LAZY embedding.
     The embedding model loads on FIRST QUERY, not at startup.
     Saves ~300-400 MB RAM at boot time.
+    
+    This function completes in milliseconds because:
+    - Imports LazyEmbeddingFunction (5 KB)
+    - Creates Chroma client (lightweight)
+    - Does NOT load the 300-400 MB embedding model yet
     """
 
     global collection
 
+    logger.info("[STARTUP] Initializing Chroma with lazy embedding...")
+
     try:
+        # Import lazy wrapper (5 KB, instant)
         from app.services.lazy_embedding import LazyEmbeddingFunction
         
-        # Use lazy-loading embedding function (defers model load)
+        logger.info("[STARTUP] LazyEmbeddingFunction imported")
+        
+        # Create lazy embedding function (does NOT load model yet)
         ef = LazyEmbeddingFunction(
             model_name="BAAI/bge-small-en-v1.5"
         )
 
+        # Initialize Chroma client (lightweight)
         client = chromadb.PersistentClient(path="chroma_db")
+        logger.info("[STARTUP] ChromaDB client created")
 
+        # Get or create collection (doesn't load embedding model)
         collection = client.get_or_create_collection(
             name="hr_policies",
             embedding_function=ef
         )
 
         logger.info(
-            "Chroma initialized with lazy embedding (model will load on first RAG query)"
+            "[STARTUP] ✅ Chroma collection ready (lazy embedding will load on first RAG query)"
         )
 
-    except Exception:
-        logger.exception("CHROMA_INIT_ERROR")
+    except ImportError as e:
+        logger.error(f"[STARTUP] ❌ Failed to import LazyEmbeddingFunction: {e}")
+        logger.error("[STARTUP] Make sure app/services/lazy_embedding.py exists!")
+        collection = None
+    except Exception as e:
+        logger.exception("[STARTUP] ❌ CHROMA_INIT_ERROR")
         collection = None
 
 
@@ -372,16 +398,26 @@ def serve_video(filename):
 
 
 # ============================================================================
-# STARTUP
+# STARTUP SEQUENCE
 # ============================================================================
 
-initialize_database()
+logger.info("=" * 80)
+logger.info("STARTING WhatsApp HR Assistant")
+logger.info("=" * 80)
 
+logger.info("[STARTUP] Initializing database...")
+initialize_database()
+logger.info("[STARTUP] ✅ Database initialized")
+
+logger.info("[STARTUP] Step 1: Initializing Gemini...")
 init_gemini()
 
-init_chroma()  # Now uses lazy embedding - fast startup
+logger.info("[STARTUP] Step 2: Initializing Chroma...")
+init_chroma()
 
-logger.info("APPLICATION_STARTUP_COMPLETE")
+logger.info("=" * 80)
+logger.info("APPLICATION_STARTUP_COMPLETE ✅")
+logger.info("=" * 80)
 
 
 if __name__ == "__main__":

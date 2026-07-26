@@ -3,7 +3,7 @@ WhatsApp HR Assistant - Main Flask Application (OPTIMIZED FOR RENDER)
 Webhook server with Gemini API embeddings to fit in 512 MB RAM and avoid ONNX crashes.
 """
 
-import logging
+
 import os
 import sys
 import traceback
@@ -11,15 +11,16 @@ import traceback
 # Prevent ChromaDB telemetry from making external calls at startup
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
-os.environ["ALLOW_RESET"] = "TRUE"
-# Disable ONNXRuntime execution providers that trigger AVX crashes on cloud VMs
 os.environ["ORT_DISABLE_CPU_OPTIMIZATION"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Add project root to Python path (Render/Linux fix)
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+    
+import logging
 import chromadb
 from flask import Flask, request, send_from_directory
 import google.genai as genai
@@ -102,7 +103,7 @@ configure(WHATSAPP_TOKEN, PHONE_NUMBER_ID)
 logger.info('Configuration loaded successfully')
 
 # Global objects initialized at startup
-collection = None
+
 gemini_client = None
 
 
@@ -138,31 +139,28 @@ def init_gemini():
         logger.error('[STARTUP] ❌ GEMINI_API_KEY not set')
 
 
+from app.services.lazy_embedding import LazyEmbeddingFunction
+
+collection = None
+
 def init_chroma():
-    """Initialize Ephemeral ChromaDB client with Gemini API embeddings."""
     global collection
+    logger.info("[STARTUP] Step 2: Initializing ChromaDB...")
     try:
-        logger.info("[STARTUP] Creating Chroma EphemeralClient...")
+        # Create Ephemeral Client
         client = chromadb.EphemeralClient()
 
-        if GEMINI_API_KEY:
-            logger.info(
-                "[STARTUP] Setting up Gemini API Embedding Function..."
-            )
-            embedding_fn = GeminiEmbeddingFunction(api_key=GEMINI_API_KEY)
-            collection = client.get_or_create_collection(
-                name="hr_policies", embedding_function=embedding_fn
-            )
-        else:
-            logger.warning(
-                "[STARTUP] GEMINI_API_KEY missing, creating collection without embedding function"
-            )
-            collection = client.get_or_create_collection(name="hr_policies")
+        # Initialize custom Gemini embedding function
+        embedding_fn = LazyEmbeddingFunction(model_name="text-embedding-004")
 
-        logger.info("[STARTUP] ✅ Chroma initialized successfully")
+        # PASS embedding_function HERE so Chroma doesn't load default ONNX models
+        collection = client.get_or_create_collection(
+            name="hr_policies",
+            embedding_function=embedding_fn
+        )
+        logger.info("[STARTUP] ✅ ChromaDB initialized successfully with Gemini Embeddings")
     except Exception as e:
-        logger.error(f"[STARTUP] ❌ Chroma initialization failed: {e}")
-        logger.error(traceback.format_exc())
+        logger.error(f"[STARTUP] ❌ ChromaDB initialization failed: {e}")
 
 
 def router(employee, message):

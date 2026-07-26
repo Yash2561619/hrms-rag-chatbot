@@ -17,16 +17,12 @@ from typing import Optional
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 import chromadb
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from database import get_all_policy_files
 
 from config import Config
 from scripts.step1_extract import extract_text_from_pdf
-from app.services.s3_service import (
-    
-    download_policy_temp
-)
+from app.services.s3_service import download_policy_temp
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +81,7 @@ def save_pdf_registry(registry):
 def build_index():
     """
     Build Chroma index with versioning and incremental updating support.
+    Uses lazy embedding for memory efficiency.
     
     Features:
     - Keep multiple PDF versions/track version info in metadata
@@ -97,23 +94,27 @@ def build_index():
     print("Building HR Policy Knowledge Base with Versioning")
     print("=" * 80)
 
-    ef = SentenceTransformerEmbeddingFunction(
-    model_name="BAAI/bge-small-en-v1.5"
-)
+    from app.services.lazy_embedding import LazyEmbeddingFunction
+    
+    # Use lazy embedding function
+    ef = LazyEmbeddingFunction(
+        model_name="BAAI/bge-small-en-v1.5"
+    )
+    
     client = chromadb.PersistentClient(path="chroma_db")
 
     # Get or create collection
     try:
         collection = client.get_collection(
-           "hr_policies",
-           embedding_function=ef
-)
+            "hr_policies",
+            embedding_function=ef
+        )
         print("[INFO] Using existing collection (preserving old chunks)")
     except Exception:
         collection = client.create_collection(
-          "hr_policies",
-           embedding_function=ef
-)
+            "hr_policies",
+            embedding_function=ef
+        )
         print("[INFO] Created new collection")
 
     splitter = RecursiveCharacterTextSplitter(
@@ -140,10 +141,10 @@ def build_index():
         current_pdfs[file_name] = file_hash
 
         policy_records[file_name] = {
-           "s3_key": s3_key,
-           "version": version,
-           "hash": file_hash
-    }
+            "s3_key": s3_key,
+            "version": version,
+            "hash": file_hash
+        }
 
     print(f"\n[INFO] Current PDFs in database: {len(current_pdfs)}")
 
@@ -313,15 +314,17 @@ def display_index_status():
     global collection
 
     if collection is None:
-        ef = SentenceTransformerEmbeddingFunction(
-        model_name="BAAI/bge-small-en-v1.5"
-)       
+        from app.services.lazy_embedding import LazyEmbeddingFunction
+        
+        ef = LazyEmbeddingFunction(
+            model_name="BAAI/bge-small-en-v1.5"
+        )
         client = chromadb.PersistentClient(path="chroma_db")
         try:
-           collection = client.create_collection(
-           "hr_policies",
-           embedding_function=ef
-        )
+            collection = client.create_collection(
+                "hr_policies",
+                embedding_function=ef
+            )
         except Exception:
             print("[ERROR] Collection not initialized or empty")
             return

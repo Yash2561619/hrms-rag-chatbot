@@ -1,6 +1,6 @@
 """
-WhatsApp HR Assistant - Main Flask Application
-Webhook server with routing to RAG, leave handling, media dispatch, etc.
+WhatsApp HR Assistant - Main Flask Application (OPTIMIZED FOR RENDER)
+Webhook server with lazy-loading embeddings to fit in 512 MB RAM.
 Uses Google Gemini API only (no Anthropic).
 """
 
@@ -11,7 +11,6 @@ import logging
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 import chromadb
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 import google.genai as genai
 from flask import Flask, request, send_from_directory
 
@@ -97,13 +96,6 @@ collection = None
 gemini_client = None
 
 
-
-
-
-
-
-
-
 def init_gemini():
     """Initialize Gemini client at startup."""
     global gemini_client
@@ -116,12 +108,19 @@ def init_gemini():
 
 
 def init_chroma():
-    """Initialize persistent Chroma collection."""
+    """
+    Initialize persistent Chroma collection with LAZY embedding.
+    The embedding model loads on FIRST QUERY, not at startup.
+    Saves ~300-400 MB RAM at boot time.
+    """
 
     global collection
 
     try:
-        ef = SentenceTransformerEmbeddingFunction(
+        from app.services.lazy_embedding import LazyEmbeddingFunction
+        
+        # Use lazy-loading embedding function (defers model load)
+        ef = LazyEmbeddingFunction(
             model_name="BAAI/bge-small-en-v1.5"
         )
 
@@ -132,15 +131,14 @@ def init_chroma():
             embedding_function=ef
         )
 
-        count = collection.count()
-
         logger.info(
-            f"Chroma initialized | chunks={count}"
+            "Chroma initialized with lazy embedding (model will load on first RAG query)"
         )
 
     except Exception:
         logger.exception("CHROMA_INIT_ERROR")
         collection = None
+
 
 def router(employee, message):
     intent = classify_intent(message)
@@ -184,12 +182,11 @@ def router(employee, message):
 
         if intent == "rag":
             handle_rag_query(
-              employee,
-              message,
-              collection,
-              gemini_client,
-             
-    )
+                employee,
+                message,
+                collection,
+                gemini_client,
+            )
 
         elif intent == "leave_balance":
             handle_leave_balance(employee)
@@ -343,6 +340,7 @@ def webhook():
 
     return 'OK', 200
 
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint for monitoring and deployment platforms."""
@@ -377,17 +375,11 @@ def serve_video(filename):
 # STARTUP
 # ============================================================================
 
-# ==========================
-# Application Startup
-# ==========================
-
 initialize_database()
 
 init_gemini()
 
-init_chroma()
-
-
+init_chroma()  # Now uses lazy embedding - fast startup
 
 logger.info("APPLICATION_STARTUP_COMPLETE")
 
@@ -399,5 +391,4 @@ if __name__ == "__main__":
         debug=False
     )
 
-# cloudflared tunnel --url http://localhost:5000 
-
+# cloudflared tunnel --url http://localhost:5000

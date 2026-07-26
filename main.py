@@ -118,81 +118,81 @@ def init_gemini():
         logger.error('[STARTUP] ❌ GEMINI_API_KEY not set')
 
 # Disable ChromaDB's problematic components
-os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
-os.environ["ANONYMIZED_TELEMETRY"] = "False"
-def init_chroma():
-    """
-    Initialize persistent Chroma collection with LAZY embedding.
-    The embedding model loads on FIRST QUERY, not at startup.
-    Saves ~300-400 MB RAM at boot time.
-    """
+# os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
+# os.environ["ANONYMIZED_TELEMETRY"] = "False"
+# def init_chroma():
+#     """
+#     Initialize persistent Chroma collection with LAZY embedding.
+#     The embedding model loads on FIRST QUERY, not at startup.
+#     Saves ~300-400 MB RAM at boot time.
+#     """
 
-    global collection
+#     global collection
 
-    logger.info("[STARTUP] Initializing Chroma with lazy embedding...")
+#     logger.info("[STARTUP] Initializing Chroma with lazy embedding...")
 
-    try:
-        # Step 1: Import lazy wrapper
-        logger.info("[STARTUP] Step 1: Importing LazyEmbeddingFunction...")
-        try:
-            from app.services.lazy_embedding import LazyEmbeddingFunction
-            logger.info("[STARTUP] ✅ LazyEmbeddingFunction imported successfully")
-        except ImportError as ie:
-            logger.error(f"[STARTUP] ❌ IMPORT_ERROR: Failed to import LazyEmbeddingFunction")
-            logger.error(f"[STARTUP] ImportError details: {ie}")
-            logger.error(f"[STARTUP] Full traceback: {traceback.format_exc()}")
-            raise
+#     try:
+#         # Step 1: Import lazy wrapper
+#         logger.info("[STARTUP] Step 1: Importing LazyEmbeddingFunction...")
+#         try:
+#             from app.services.lazy_embedding import LazyEmbeddingFunction
+#             logger.info("[STARTUP] ✅ LazyEmbeddingFunction imported successfully")
+#         except ImportError as ie:
+#             logger.error(f"[STARTUP] ❌ IMPORT_ERROR: Failed to import LazyEmbeddingFunction")
+#             logger.error(f"[STARTUP] ImportError details: {ie}")
+#             logger.error(f"[STARTUP] Full traceback: {traceback.format_exc()}")
+#             raise
         
-        # Step 2: Create lazy embedding function
-        logger.info("[STARTUP] Step 2: Creating LazyEmbeddingFunction instance...")
-        try:
-            ef = LazyEmbeddingFunction(
-                model_name="BAAI/bge-small-en-v1.5"
-            )
-            logger.info("[STARTUP] ✅ LazyEmbeddingFunction instance created")
-        except Exception as e:
-            logger.error(f"[STARTUP] ❌ Failed to create LazyEmbeddingFunction: {e}")
-            logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
-            raise
+#         # Step 2: Create lazy embedding function
+#         logger.info("[STARTUP] Step 2: Creating LazyEmbeddingFunction instance...")
+#         try:
+#             ef = LazyEmbeddingFunction(
+#                 model_name="BAAI/bge-small-en-v1.5"
+#             )
+#             logger.info("[STARTUP] ✅ LazyEmbeddingFunction instance created")
+#         except Exception as e:
+#             logger.error(f"[STARTUP] ❌ Failed to create LazyEmbeddingFunction: {e}")
+#             logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
+#             raise
 
-        # Step 3: Initialize ChromaDB client
-        # logger.info("[STARTUP] Step 3: Creating ChromaDB persistent client...")
-        # try:
-        #     client = chromadb.PersistentClient(path="chroma_db")
-        #     logger.info("[STARTUP] ✅ ChromaDB client created")
-        # except Exception as e:
-        #     logger.error(f"[STARTUP] ❌ Failed to create ChromaDB client: {e}")
-        #     logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
-        #     raise
+#         # Step 3: Initialize ChromaDB client
+#         # logger.info("[STARTUP] Step 3: Creating ChromaDB persistent client...")
+#         # try:
+#         #     client = chromadb.PersistentClient(path="chroma_db")
+#         #     logger.info("[STARTUP] ✅ ChromaDB client created")
+#         # except Exception as e:
+#         #     logger.error(f"[STARTUP] ❌ Failed to create ChromaDB client: {e}")
+#         #     logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
+#         #     raise
 
-        # # Step 4: Get or create collection
-        # logger.info("[STARTUP] Step 4: Getting or creating 'hr_policies' collection...")
-        # try:
-        #     collection = client.get_or_create_collection(
-        #         name="hr_policies",
-        #         embedding_function=ef
-        #     )
-        #     logger.info("[STARTUP] ✅ Collection 'hr_policies' ready")
-        # except Exception as e:
-        #     logger.error(f"[STARTUP] ❌ Failed to get/create collection: {e}")
-        #     logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
-        #     raise
+#         # # Step 4: Get or create collection
+#         # logger.info("[STARTUP] Step 4: Getting or creating 'hr_policies' collection...")
+#         # try:
+#         #     collection = client.get_or_create_collection(
+#         #         name="hr_policies",
+#         #         embedding_function=ef
+#         #     )
+#         #     logger.info("[STARTUP] ✅ Collection 'hr_policies' ready")
+#         # except Exception as e:
+#         #     logger.error(f"[STARTUP] ❌ Failed to get/create collection: {e}")
+#         #     logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
+#         #     raise
 
-        # Step 3: Skip Chroma completely (TEST ONLY)
-        logger.info("[STARTUP] Skipping Chroma initialization for testing...")
-        collection = None
-        logger.info("[STARTUP] ✅ Chroma skipped")
-        return
+#         # Step 3: Skip Chroma completely (TEST ONLY)
+#         logger.info("[STARTUP] Skipping Chroma initialization for testing...")
+#         collection = None
+#         logger.info("[STARTUP] ✅ Chroma skipped")
+#         return
 
         
 
-    except ImportError as e:
-        logger.error(f"[STARTUP] ❌ FINAL: ImportError during Chroma init: {e}")
-        collection = None
-    except Exception as e:
-        logger.error(f"[STARTUP] ❌ FINAL: Exception during Chroma init: {e}")
-        logger.error(f"[STARTUP] Full traceback:\n{traceback.format_exc()}")
-        collection = None
+#     except ImportError as e:
+#         logger.error(f"[STARTUP] ❌ FINAL: ImportError during Chroma init: {e}")
+#         collection = None
+#     except Exception as e:
+#         logger.error(f"[STARTUP] ❌ FINAL: Exception during Chroma init: {e}")
+#         logger.error(f"[STARTUP] Full traceback:\n{traceback.format_exc()}")
+#         collection = None
 
 
 def router(employee, message):
@@ -441,8 +441,11 @@ logger.info("[STARTUP] ✅ Database initialized")
 logger.info("[STARTUP] Step 1: Initializing Gemini...")
 init_gemini()
 
-logger.info("[STARTUP] Step 2: Initializing Chroma...")
-init_chroma()
+# logger.info("[STARTUP] Step 2: Initializing Chroma...")
+# init_chroma()
+
+logger.info("[STARTUP] Step 2: Skipped Chroma for testing")
+collection = None
 
 logger.info("=" * 80)
 logger.info("APPLICATION_STARTUP_COMPLETE ✅")

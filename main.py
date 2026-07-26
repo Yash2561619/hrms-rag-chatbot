@@ -10,10 +10,17 @@ import sys
 # MUST BE AT THE VERY TOP: Force ChromaDB & ONNX to skip native SIMD optimizations
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
-os.environ["ORT_DISABLE_CPU_OPTIMIZATION"] = "1"
-os.environ["ONNXRUNTIME_EXECUTION_PROVIDERS"] = "CPUExecutionProvider"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+
+
+from types import ModuleType
+
+# Create a mock onnxruntime module to prevent ChromaDB from loading native C++ binaries that crash on Render
+class DummyONNX(ModuleType):
+    def __getattr__(self, name):
+        return None
+
+sys.modules['onnxruntime'] = DummyONNX('onnxruntime')
 # Add project root to Python path
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
@@ -120,38 +127,20 @@ def init_gemini():
 
 from chromadb.config import Settings
 
-
 def init_chroma():
-    """Initialize Ephemeral ChromaDB without triggering ONNX Runtime default imports."""
     global collection
-    logger.info("[STARTUP] Initializing ChromaDB with custom settings...")
-
+    logger.info("[STARTUP] Initializing ChromaDB safely...")
     try:
-        # 1. Initialize client with telemetry disabled in Settings
-        client = chromadb.EphemeralClient(
-            settings=Settings(
-                anonymized_telemetry=False,
-                allow_reset=True,
-                is_persistent=False,
-            )
-        )
-
-        # 2. Attach Gemini Embedding Function
+        client = chromadb.EphemeralClient()
         embedding_fn = LazyEmbeddingFunction(model_name="text-embedding-004")
-
-        # 3. Create collection with explicit embedding function
+        
         collection = client.get_or_create_collection(
-            name="hr_policies", embedding_function=embedding_fn
+            name="hr_policies",
+            embedding_function=embedding_fn
         )
-
-        logger.info(
-            "[STARTUP] ✅ ChromaDB initialized successfully with Gemini Embeddings"
-        )
-
+        logger.info("[STARTUP] ✅ ChromaDB initialized successfully!")
     except Exception as e:
         logger.error(f"[STARTUP] ❌ ChromaDB initialization failed: {e}")
-        logger.error(traceback.format_exc())
-
 
 def router(employee, message):
     intent = classify_intent(message)

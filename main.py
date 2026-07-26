@@ -156,31 +156,35 @@ def init_chroma():
             raise
 
         # Step 3: Initialize ChromaDB client
-        logger.info("[STARTUP] Step 3: Creating ChromaDB persistent client...")
-        try:
-            client = chromadb.PersistentClient(path="chroma_db")
-            logger.info("[STARTUP] ✅ ChromaDB client created")
-        except Exception as e:
-            logger.error(f"[STARTUP] ❌ Failed to create ChromaDB client: {e}")
-            logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
-            raise
+        # logger.info("[STARTUP] Step 3: Creating ChromaDB persistent client...")
+        # try:
+        #     client = chromadb.PersistentClient(path="chroma_db")
+        #     logger.info("[STARTUP] ✅ ChromaDB client created")
+        # except Exception as e:
+        #     logger.error(f"[STARTUP] ❌ Failed to create ChromaDB client: {e}")
+        #     logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
+        #     raise
 
-        # Step 4: Get or create collection
-        logger.info("[STARTUP] Step 4: Getting or creating 'hr_policies' collection...")
-        try:
-            collection = client.get_or_create_collection(
-                name="hr_policies",
-                embedding_function=ef
-            )
-            logger.info("[STARTUP] ✅ Collection 'hr_policies' ready")
-        except Exception as e:
-            logger.error(f"[STARTUP] ❌ Failed to get/create collection: {e}")
-            logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
-            raise
+        # # Step 4: Get or create collection
+        # logger.info("[STARTUP] Step 4: Getting or creating 'hr_policies' collection...")
+        # try:
+        #     collection = client.get_or_create_collection(
+        #         name="hr_policies",
+        #         embedding_function=ef
+        #     )
+        #     logger.info("[STARTUP] ✅ Collection 'hr_policies' ready")
+        # except Exception as e:
+        #     logger.error(f"[STARTUP] ❌ Failed to get/create collection: {e}")
+        #     logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
+        #     raise
 
-        logger.info(
-            "[STARTUP] ✅✅✅ Chroma collection initialized successfully (lazy embedding will load on first RAG query)"
-        )
+        # Step 3: Skip Chroma completely (TEST ONLY)
+        logger.info("[STARTUP] Skipping Chroma initialization for testing...")
+        collection = None
+        logger.info("[STARTUP] ✅ Chroma skipped")
+        return
+
+        
 
     except ImportError as e:
         logger.error(f"[STARTUP] ❌ FINAL: ImportError during Chroma init: {e}")

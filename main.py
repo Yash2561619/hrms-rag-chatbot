@@ -122,74 +122,37 @@ os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 def init_chroma():
     """
-    Initialize persistent Chroma collection with LAZY embedding.
-    The embedding model loads on FIRST QUERY, not at startup.
-    Saves ~300-400 MB RAM at boot time.
+    Debug version:
+    - Tests whether ChromaDB client works.
+    - Does NOT use embedding_function.
     """
 
     global collection
 
-    logger.info("[STARTUP] Initializing Chroma with lazy embedding...")
+    logger.info("[STARTUP] Initializing Chroma (DEBUG MODE)...")
 
     try:
-        # Step 1: Import lazy wrapper
-        logger.info("[STARTUP] Step 1: Importing LazyEmbeddingFunction...")
-        try:
-            from app.services.lazy_embedding import LazyEmbeddingFunction
-            logger.info("[STARTUP] ✅ LazyEmbeddingFunction imported successfully")
-        except ImportError as ie:
-            logger.error(f"[STARTUP] ❌ IMPORT_ERROR: Failed to import LazyEmbeddingFunction")
-            logger.error(f"[STARTUP] ImportError details: {ie}")
-            logger.error(f"[STARTUP] Full traceback: {traceback.format_exc()}")
-            raise
-        
-        # Step 2: Create lazy embedding function
-        logger.info("[STARTUP] Step 2: Creating LazyEmbeddingFunction instance...")
-        try:
-            ef = LazyEmbeddingFunction(
-                model_name="BAAI/bge-small-en-v1.5"
-            )
-            logger.info("[STARTUP] ✅ LazyEmbeddingFunction instance created")
-        except Exception as e:
-            logger.error(f"[STARTUP] ❌ Failed to create LazyEmbeddingFunction: {e}")
-            logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
-            raise
+        # Step 1
+        logger.info("[STARTUP] Step 1: Creating ChromaDB PersistentClient...")
 
-        #Step 3: Initialize ChromaDB client
-        logger.info("[STARTUP] Step 3: Creating ChromaDB persistent client...")
-        try:
-            client = chromadb.PersistentClient(path="chroma_db")
-            logger.info("[STARTUP] ✅ ChromaDB client created")
-        except Exception as e:
-            logger.error(f"[STARTUP] ❌ Failed to create ChromaDB client: {e}")
-            logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
-            raise
+        client = chromadb.PersistentClient(path="chroma_db")
 
-        # Step 4: Get or create collection
-        logger.info("[STARTUP] Step 4: Getting or creating 'hr_policies' collection...")
-        try:
-            collection = client.get_or_create_collection(
-                name="hr_policies",
-                
-            )
-            logger.info("[STARTUP] ✅ Collection 'hr_policies' ready")
-        except Exception as e:
-            logger.error(f"[STARTUP] ❌ Failed to get/create collection: {e}")
-            logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
-            raise
+        logger.info("[STARTUP] ✅ Step 1 SUCCESS - PersistentClient created")
 
-       
+        # Step 2
+        logger.info("[STARTUP] Step 2: Creating/Opening collection...")
 
-        
+        collection = client.get_or_create_collection(
+            name="hr_policies"
+        )
 
-    except ImportError as e:
-        logger.error(f"[STARTUP] ❌ FINAL: ImportError during Chroma init: {e}")
-        collection = None
+        logger.info("[STARTUP] ✅ Step 2 SUCCESS - Collection created")
+
+        logger.info("[STARTUP] ✅ Chroma initialized successfully!")
+
     except Exception as e:
-        logger.error(f"[STARTUP] ❌ FINAL: Exception during Chroma init: {e}")
-        logger.error(f"[STARTUP] Full traceback:\n{traceback.format_exc()}")
+        logger.exception("[STARTUP] ❌ Chroma initialization failed")
         collection = None
-
 
 def router(employee, message):
     intent = classify_intent(message)

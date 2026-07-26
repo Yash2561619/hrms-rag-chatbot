@@ -3,7 +3,7 @@ import boto3
 from uuid import uuid4
 import tempfile
 from botocore.exceptions import ClientError
-
+import logging
 logger = logging.getLogger(__name__)
 
 s3 = boto3.client(

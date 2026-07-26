@@ -1,21 +1,22 @@
+"""RAG Service for WhatsApp HR Assistant.
+
+Location: app/services/rag_service.py
+"""
+
+import logging
 import os
 import time
-import logging
-from typing import  Any, Dict
+from typing import Any, Dict
 
+from app.services.response_service import format_hr_response
+from app.services.whatsapp_service import send_text
 from config import Config
 from database import log_activity
 from google.genai.errors import ClientError
 
-from app.services.whatsapp_service import send_text
-from app.services.intent_service import classify_intent
-from app.services.response_service import format_hr_response
-
 logger = logging.getLogger(__name__)
 
 POLICY_FOLDER = Config.POLICY_FOLDER
-
-
 
 
 def handle_rag_query(
@@ -25,7 +26,6 @@ def handle_rag_query(
     gemini_client: Any,
 ) -> None:
 
-    
     sender = employee["whatsapp"]
     employee_id = employee["employee_id"]
 
@@ -37,7 +37,6 @@ def handle_rag_query(
         # =====================================================
         # 1. INPUT VALIDATION
         # =====================================================
-
         if not message or len(message.strip()) < 3:
             send_text(sender, "⚠️ Please ask a more specific question.")
             return
@@ -55,18 +54,8 @@ def handle_rag_query(
             return
 
         # =====================================================
-        # 2. INTENT CLASSIFICATION
+        # 2. CHROMA COLLECTION HEALTH CHECK
         # =====================================================
-
-        logger.info(
-          f"RAG_QUERY | user={employee_id}"
-)
-        
-
-        # =====================================================
-        # 3. CHROMA COLLECTION HEALTH CHECK
-        # =====================================================
-
         try:
             chunk_count = collection.count()
             logger.info(
@@ -92,38 +81,27 @@ def handle_rag_query(
             return
 
         # =====================================================
-        # 4. CHROMA VECTOR SEARCH WITH FALLBACK
+        # 3. CHROMA VECTOR SEARCH
         # =====================================================
-
         results = None
         n_results = min(10, chunk_count)
 
-        # Attempt 1: Metadata-filtered search
-        
-
-        # Attempt 2: Global vector search fallback
-        if (
-            not results
-            or "documents" not in results
-            or not results["documents"]
-            or not results["documents"][0]
-        ):
-            try:
-                logger.info(
-                    f"RAG_GLOBAL_SEARCH | n_results={n_results}"
-                )
-                results = collection.query(
-                    query_texts=[message],
-                    n_results=n_results,
-                    include=["documents", "metadatas", "distances"],
-                )
-            except Exception:
-                logger.exception("CHROMA_QUERY_FAILED")
-                send_text(
-                    sender,
-                    "❌ Unable to search HR policies right now.",
-                )
-                return
+        try:
+            logger.info(
+                f"RAG_GLOBAL_SEARCH | user={employee_id} | n_results={n_results}"
+            )
+            results = collection.query(
+                query_texts=[message],
+                n_results=n_results,
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception:
+            logger.exception("CHROMA_QUERY_FAILED")
+            send_text(
+                sender,
+                "❌ Unable to search HR policies right now.",
+            )
+            return
 
         # Handle empty document results
         if (
@@ -132,9 +110,7 @@ def handle_rag_query(
             or not results["documents"]
             or not results["documents"][0]
         ):
-            logger.warning(
-                f"RAG_NO_RESULTS | user={employee_id}"
-            )
+            logger.warning(f"RAG_NO_RESULTS | user={employee_id}")
             send_text(
                 sender,
                 "📚 I could not find relevant information in the HR policies.",
@@ -142,9 +118,8 @@ def handle_rag_query(
             return
 
         # =====================================================
-        # 5. DISTANCE THRESHOLD GUARDRAIL
+        # 4. DISTANCE THRESHOLD GUARDRAIL
         # =====================================================
-
         try:
             distances = results.get("distances", [[]])[0]
             best_distance = distances[0] if distances else None
@@ -168,29 +143,24 @@ def handle_rag_query(
             logger.warning("RAG_DISTANCE_CHECK_SKIPPED")
 
         # =====================================================
-        # 6. RE-RANKING VIA CROSS-ENCODER
+        # 5. SELECT TOP CHUNKS & CONTEXT PREPARATION
         # =====================================================
-
         documents = results["documents"][0]
-        metadatas = results["metadatas"][0]
+        metadatas = (
+            results["metadatas"][0] if results.get("metadatas") else []
+        )
 
-        
-        
-
-        # Select top 3 re-ranked chunks
         top_docs = documents[:3]
-        top_metadata = metadatas[:3]
+        top_metadata = metadatas[:3] if metadatas else []
 
         context = "\n\n".join(top_docs)
-        results["metadatas"][0] = top_metadata
 
         # =====================================================
-        # 7. METADATA SOURCE EXTRACTION
+        # 6. METADATA SOURCE EXTRACTION
         # =====================================================
-
         sources = []
-        if results.get("metadatas"):
-            for metadata in results["metadatas"][0]:
+        if top_metadata:
+            for metadata in top_metadata:
                 if metadata:
                     source = metadata.get("source", "Unknown Policy")
                     if source not in sources:
@@ -201,9 +171,8 @@ def handle_rag_query(
         )
 
         # =====================================================
-        # 8. PROMPT CONSTRUCT
+        # 7. PROMPT CONSTRUCT
         # =====================================================
-
         prompt = f"""
 You are ApexHR, a professional HR assistant for employees.
 
@@ -226,9 +195,8 @@ FINAL ANSWER:
 """
 
         # =====================================================
-        # 9. LLM GENERATION WITH RETRY (EXPONENTIAL BACKOFF)
+        # 8. LLM GENERATION WITH RETRY (EXPONENTIAL BACKOFF)
         # =====================================================
-
         response = None
         backoff = 2
 
@@ -251,7 +219,6 @@ FINAL ANSWER:
                     break
 
             except ClientError as e:
-                # Handle 429 Rate Limits using exponential backoff
                 if "429" in str(e):
                     logger.warning(
                         f"GEMINI_429 | user={employee_id} | attempt={attempt + 1} | wait={backoff}s"
@@ -272,16 +239,12 @@ FINAL ANSWER:
                 break
 
         # =====================================================
-        # 10. RESPONSE FORMATTING & PAYLOAD TRUNCATION
+        # 9. RESPONSE FORMATTING & PAYLOAD TRUNCATION
         # =====================================================
-
         if response and response.text:
             raw_answer = response.text.strip()
         else:
-            # Fallback to direct raw retrieved context if LLM call fails
-            logger.warning(
-                f"GEMINI_FALLBACK_USED | user={employee_id}"
-            )
+            logger.warning(f"GEMINI_FALLBACK_USED | user={employee_id}")
             fallback_text = context[:600].strip()
             raw_answer = (
                 "⚠️ The AI service is temporarily busy, but I found relevant HR policy information:\n\n"
@@ -302,21 +265,16 @@ FINAL ANSWER:
                 answer += f"• {clean_name}\n"
 
         # =====================================================
-        # 11. DISPATCH RESPONSE & LOGGING
+        # 10. DISPATCH RESPONSE & LOGGING
         # =====================================================
-
         send_text(sender, answer)
         log_activity(
-            f"RAG_QUERY | {employee['name']} | {message[:50]}"
+            f"RAG_QUERY | {employee.get('name', 'Employee')} | {message[:50]}"
         )
-        logger.info(
-            f"RAG_QUERY_SUCCESS | user={employee_id}"
-        )
+        logger.info(f"RAG_QUERY_SUCCESS | user={employee_id}")
 
     except Exception:
-        logger.exception(
-            f"RAG_FATAL_ERROR | user={employee_id}"
-        )
+        logger.exception(f"RAG_FATAL_ERROR | user={employee_id}")
         send_text(
             sender,
             "❌ Sorry, something went wrong while searching the HR policies.",

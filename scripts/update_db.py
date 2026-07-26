@@ -1,28 +1,36 @@
-import os
-import sys
+"""
+HR Policy Knowledge Base Builder with Incremental Indexing & Gemini API Embeddings.
+Location: scripts/update_db.py (or update_db.py)
 
-# Add project root to Python path (Render/Linux fix)
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PROJECT_ROOT)
+Uses Google Gemini API embeddings (text-embedding-004) to avoid ONNX/PyTorch native crashes
+and keep memory usage below 100 MB on Render deployments.
+"""
 
-import re
-import logging
 import hashlib
 import json
-
+import logging
+import os
+import re
+import sys
 from datetime import datetime
 from typing import Optional
 
-# Disable ChromaDB telemetry before importing chromadb
+# Prevent ChromaDB telemetry
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
+
+# Add project root to Python path
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 import chromadb
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from database import get_all_policy_files
 
-from config import Config
-from scripts.step1_extract import extract_text_from_pdf
+from app.services.lazy_embedding import LazyEmbeddingFunction
 from app.services.s3_service import download_policy_temp
+from config import Config
+from database import get_all_policy_files
+from scripts.step1_extract import extract_text_from_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +41,7 @@ collection = None
 
 
 def get_pdf_version(filename: str) -> str:
-    """
-    Extract version from PDF filename.
+    """Extract version from PDF filename.
 
     Examples:
     - leave_policy_v1.pdf → "1.0"
@@ -47,85 +54,66 @@ def get_pdf_version(filename: str) -> str:
         return f"{version_num}.0"
     return "1.0"
 
+
 def get_pdf_hash(pdf_path: str) -> str:
     """Generate MD5 hash for a PDF file."""
     hash_md5 = hashlib.md5()
-
     with open(pdf_path, "rb") as f:
         for chunk in iter(lambda: f.read(4096), b""):
             hash_md5.update(chunk)
-
     return hash_md5.hexdigest()
 
 
 def load_pdf_registry():
     registry_path = os.path.join("chroma_db", "pdf_registry.json")
-
     if os.path.exists(registry_path):
         with open(registry_path, "r", encoding="utf-8") as f:
             return json.load(f)
-
     return {}
 
 
 def save_pdf_registry(registry):
     registry_path = os.path.join("chroma_db", "pdf_registry.json")
-
     os.makedirs(os.path.dirname(registry_path), exist_ok=True)
-
     with open(registry_path, "w", encoding="utf-8") as f:
         json.dump(registry, f, indent=2)
-
     logger.info(f"REGISTRY_SAVED | path={registry_path}")
 
+
 def build_index():
-    """
-    Build Chroma index with versioning and incremental updating support.
-    Uses lazy embedding for memory efficiency.
-    
-    Features:
-    - Keep multiple PDF versions/track version info in metadata
-    - Remove old chunks & registry entries when a PDF is deleted
-    - Only re-process new or modified PDFs (Hash-based incremental indexing)
+    """Build Chroma index with versioning and incremental updating support.
+
+    Uses Gemini API embeddings via LazyEmbeddingFunction for zero local RAM
+    overhead and no ONNX dependencies.
     """
     global collection
 
     print("\n" + "=" * 80)
-    print("Building HR Policy Knowledge Base with Versioning")
+    print("Building HR Policy Knowledge Base with Gemini API Embeddings")
     print("=" * 80)
 
-    from app.services.lazy_embedding import LazyEmbeddingFunction
-    
-    # Use lazy embedding function
-    ef = LazyEmbeddingFunction(
-        model_name="BAAI/bge-small-en-v1.5"
-    )
-    
+    # Use Gemini API embedding function
+    ef = LazyEmbeddingFunction(model_name="text-embedding-004")
+
     client = chromadb.PersistentClient(path="chroma_db")
 
     # Get or create collection
     try:
         collection = client.get_collection(
-            "hr_policies",
-            embedding_function=ef
+            "hr_policies", embedding_function=ef
         )
         print("[INFO] Using existing collection (preserving old chunks)")
     except Exception:
         collection = client.create_collection(
-            "hr_policies",
-            embedding_function=ef
+            "hr_policies", embedding_function=ef
         )
         print("[INFO] Created new collection")
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=300,
-        chunk_overlap=40
-    )
+    splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=40)
 
     # =========================================================================
-    # STEP 1: Get current PDFs in folder & load local registry
+    # STEP 1: Get current PDFs in database & load local registry
     # =========================================================================
-
     if not os.path.exists(POLICY_FOLDER):
         print(f"[ERROR] Policy folder '{POLICY_FOLDER}' does not exist.")
         return
@@ -139,22 +127,19 @@ def build_index():
 
     for file_name, s3_key, version, file_hash in rows:
         current_pdfs[file_name] = file_hash
-
         policy_records[file_name] = {
             "s3_key": s3_key,
             "version": version,
-            "hash": file_hash
+            "hash": file_hash,
         }
 
     print(f"\n[INFO] Current PDFs in database: {len(current_pdfs)}")
-
     for pdf in current_pdfs:
         print(f"  • {pdf}")
 
     # =========================================================================
     # STEP 2: Get previous PDFs from Chroma metadata
     # =========================================================================
-
     all_chunks = collection.get()
     previous_pdfs = set()
 
@@ -170,20 +155,22 @@ def build_index():
     # =========================================================================
     # STEP 3: Remove chunks and registry entries for deleted PDFs
     # =========================================================================
-
     deleted_pdfs = previous_pdfs - set(current_pdfs.keys())
 
     if deleted_pdfs:
-        print(f"\n[WARNING] Removing chunks for deleted PDFs: {len(deleted_pdfs)}")
+        print(
+            f"\n[WARNING] Removing chunks for deleted PDFs: {len(deleted_pdfs)}"
+        )
         for deleted_pdf in deleted_pdfs:
             print(f"  ❌ Removing: {deleted_pdf}")
             chunks_to_delete = collection.get(where={"source": deleted_pdf})
-            
+
             if chunks_to_delete and chunks_to_delete.get("ids"):
                 collection.delete(ids=chunks_to_delete["ids"])
-                print(f"     Deleted {len(chunks_to_delete['ids'])} chunks from Chroma")
-            
-            # Clean up local registry tracking if present
+                print(
+                    f"     Deleted {len(chunks_to_delete['ids'])} chunks from Chroma"
+                )
+
             if deleted_pdf in registry:
                 del registry[deleted_pdf]
 
@@ -195,7 +182,6 @@ def build_index():
     # =========================================================================
     # STEP 4: Process ONLY new or changed PDFs (Incremental Indexing)
     # =========================================================================
-
     total_chunks = 0
     updated_files = 0
     new_files = 0
@@ -204,98 +190,98 @@ def build_index():
 
     for filename, current_hash in current_pdfs.items():
         if filename not in registry:
-            # Brand new PDF
             pdfs_to_process.append(filename)
             new_files += 1
-        elif registry[filename].get('hash') != current_hash:
-            # Existing PDF content has changed
+        elif registry[filename].get("hash") != current_hash:
             pdfs_to_process.append(filename)
             updated_files += 1
 
     if not pdfs_to_process:
-        print('\n[INFO] ✅ No new or changed PDFs detected.')
+        print("\n[INFO] ✅ No new or changed PDFs detected.")
     else:
-        print(f'\n[INFO] PDFs to process: {len(pdfs_to_process)}')
+        print(f"\n[INFO] PDFs to process: {len(pdfs_to_process)}")
         for pdf in pdfs_to_process:
-            print(f'  • {pdf}')
+            print(f"  • {pdf}")
 
     # Process required PDFs
     for filename in pdfs_to_process:
         s3_key = policy_records[filename]["s3_key"]
         filepath = download_policy_temp(s3_key)
-        print(f'\n[INFO] Processing: {filename}')
+        print(f"\n[INFO] Processing: {filename}")
 
         try:
             # Extract text
             text, used_ocr = extract_text_from_pdf(filepath)
 
             if not text or len(text.strip()) == 0:
-                print('  [WARNING] OCR/Extraction failed or empty document. Skipping.')
+                print(
+                    "  [WARNING] OCR/Extraction failed or empty document. Skipping."
+                )
                 continue
 
-            print(f'  ✔ Extracted {len(text)} characters (Used OCR: {used_ocr})')
+            print(
+                f"  ✔ Extracted {len(text)} characters (Used OCR: {used_ocr})"
+            )
 
             # Split into chunks
             chunks = splitter.split_text(text)
 
             if not chunks:
-                print('  [WARNING] No chunks produced. Skipping.')
+                print("  [WARNING] No chunks produced. Skipping.")
                 continue
 
-            # Remove old chunks only if this PDF is being updated
-            existing = collection.get(where={'source': filename})
-            existing_ids = existing.get('ids', []) if existing else []
+            # Remove old chunks if this PDF is being updated
+            existing = collection.get(where={"source": filename})
+            existing_ids = existing.get("ids", []) if existing else []
 
             if existing_ids:
-                print(f'  🔄 UPDATING: Removing {len(existing_ids)} old chunks')
+                print(
+                    f"  🔄 UPDATING: Removing {len(existing_ids)} old chunks"
+                )
                 collection.delete(ids=existing_ids)
             else:
-                print('  ✨ NEW: Adding new PDF')
+                print("  ✨ NEW: Adding new PDF")
 
             # Generate IDs and metadata
-            ids_list = [f'{filename}_{i}' for i in range(len(chunks))]
+            ids_list = [f"{filename}_{i}" for i in range(len(chunks))]
 
             metadatas = [
                 {
-                    'source': filename,
-                    'version': get_pdf_version(filename),
-                    'upload_date': datetime.now().isoformat(),
-                    'status': 'active',
-                    'chunk_index': i,
-                    'total_chunks': len(chunks),
-                    'used_ocr': str(used_ocr)
+                    "source": filename,
+                    "version": get_pdf_version(filename),
+                    "upload_date": datetime.now().isoformat(),
+                    "status": "active",
+                    "chunk_index": i,
+                    "total_chunks": len(chunks),
+                    "used_ocr": str(used_ocr),
                 }
                 for i in range(len(chunks))
             ]
 
             # Upsert chunks into ChromaDB
             collection.upsert(
-                documents=chunks,
-                ids=ids_list,
-                metadatas=metadatas
+                documents=chunks, ids=ids_list, metadatas=metadatas
             )
 
             total_chunks += len(chunks)
-            print(f'  ✔ Upserted {len(chunks)} chunks')
+            print(f"  ✔ Upserted {len(chunks)} chunks")
 
             # Update registry data for current file
             registry[filename] = {
-                'hash': current_pdfs[filename],
-                'chunks': len(chunks),
-                'updated_at': datetime.now().isoformat()
+                "hash": current_pdfs[filename],
+                "chunks": len(chunks),
+                "updated_at": datetime.now().isoformat(),
             }
 
         except Exception as e:
-            print(f'  [ERROR] Failed to process {filename}: {str(e)}')
+            print(f"  [ERROR] Failed to process {filename}: {str(e)}")
             continue
 
-    # Save local registry state
     save_pdf_registry(registry)
 
     # =========================================================================
     # STEP 5: Summary
     # =========================================================================
-
     print("\n" + "=" * 80)
     print("BUILD SUMMARY")
     print("=" * 80)
@@ -307,23 +293,15 @@ def build_index():
 
 
 def display_index_status():
-    """
-    Display current state of Chroma index.
-    Show what's indexed and how many chunks per file.
-    """
+    """Display current state of Chroma index."""
     global collection
 
     if collection is None:
-        from app.services.lazy_embedding import LazyEmbeddingFunction
-        
-        ef = LazyEmbeddingFunction(
-            model_name="BAAI/bge-small-en-v1.5"
-        )
+        ef = LazyEmbeddingFunction(model_name="text-embedding-004")
         client = chromadb.PersistentClient(path="chroma_db")
         try:
-            collection = client.create_collection(
-                "hr_policies",
-                embedding_function=ef
+            collection = client.get_or_create_collection(
+                "hr_policies", embedding_function=ef
             )
         except Exception:
             print("[ERROR] Collection not initialized or empty")
@@ -347,7 +325,7 @@ def display_index_status():
                 "count": 0,
                 "version": metadata.get("version", "unknown"),
                 "status": metadata.get("status", "unknown"),
-                "upload_date": metadata.get("upload_date", "unknown")
+                "upload_date": metadata.get("upload_date", "unknown"),
             }
         sources[source]["count"] += 1
 

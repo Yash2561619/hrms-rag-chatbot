@@ -6,21 +6,20 @@ Webhook server with Gemini API embeddings to fit in 512 MB RAM and avoid ONNX cr
 
 import os
 import sys
-import traceback
 
-# Prevent ChromaDB telemetry from making external calls at startup
+# MUST BE AT THE VERY TOP: Force ChromaDB & ONNX to skip native SIMD optimizations
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
 os.environ["ORT_DISABLE_CPU_OPTIMIZATION"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# Add project root to Python path (Render/Linux fix)
+# Add project root to Python path
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-    
 import logging
+import traceback
 import chromadb
 from flask import Flask, request, send_from_directory
 import google.genai as genai
@@ -39,12 +38,13 @@ from app.services.media_service import (
 )
 from app.services.rag_service import handle_rag_query
 from app.services.whatsapp_service import configure, mark_read, send_text
+from app.services.lazy_embedding import LazyEmbeddingFunction
 from config import Config
 from database import get_employee_by_whatsapp, initialize_database
 from leave_session import leave_sessions
 from rate_limiter import check_rate_limit
 
-# Setup logging with absolute paths
+# Setup logging
 LOG_DIR = os.path.join(PROJECT_ROOT, 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -65,12 +65,10 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config.from_object(Config)
 
-# Set App Configuration & Secret Keys
 app.secret_key = app.config.get('SECRET_KEY', 'apexhr-super-secret-key-2026')
 app.config['SESSION_PERMANENT'] = False
 app.config['SESSION_TYPE'] = 'filesystem'
 
-# Folders
 POLICY_FOLDER = app.config['POLICY_FOLDER']
 SALARY_FOLDER = app.config['SALARY_FOLDER']
 VIDEO_FOLDER = app.config['VIDEO_FOLDER']
@@ -79,10 +77,8 @@ os.makedirs(POLICY_FOLDER, exist_ok=True)
 os.makedirs(SALARY_FOLDER, exist_ok=True)
 os.makedirs(VIDEO_FOLDER, exist_ok=True)
 
-# Register Blueprints
 app.register_blueprint(admin_bp)
 
-# Config variables
 GEMINI_API_KEY = app.config.get('GEMINI_API_KEY')
 WHATSAPP_TOKEN = app.config.get('WHATSAPP_TOKEN')
 PHONE_NUMBER_ID = app.config.get('PHONE_NUMBER_ID')
@@ -97,30 +93,12 @@ logger.info(f"WABA_ID: {WABA_ID}")
 logger.info(f"VERIFY_TOKEN exists: {bool(VERIFY_TOKEN)}")
 logger.info("=" * 50)
 
-# Configure WhatsApp client
 configure(WHATSAPP_TOKEN, PHONE_NUMBER_ID)
 
 logger.info('Configuration loaded successfully')
 
-# Global objects initialized at startup
-
+collection = None
 gemini_client = None
-
-
-class GeminiEmbeddingFunction:
-    """Uses Google Gemini API for embeddings to keep RAM under 100 MB
-
-    and avoid native ONNX/CPU crashes on Render.
-    """
-
-    def __init__(self, api_key: str):
-        self.client = genai.Client(api_key=api_key)
-
-    def __call__(self, input: list[str]) -> list[list[float]]:
-        response = self.client.models.embed_content(
-            model="text-embedding-004", contents=input
-        )
-        return [e.values for e in response.embeddings]
 
 
 def init_gemini():
@@ -139,21 +117,16 @@ def init_gemini():
         logger.error('[STARTUP] ❌ GEMINI_API_KEY not set')
 
 
-from app.services.lazy_embedding import LazyEmbeddingFunction
-
-collection = None
-
 def init_chroma():
+    """Initialize Ephemeral ChromaDB client with Gemini API embeddings."""
     global collection
     logger.info("[STARTUP] Step 2: Initializing ChromaDB...")
     try:
-        # Create Ephemeral Client
         client = chromadb.EphemeralClient()
 
-        # Initialize custom Gemini embedding function
+        # Custom Gemini API Embedding function wrapper (Zero local ONNX/RAM)
         embedding_fn = LazyEmbeddingFunction(model_name="text-embedding-004")
 
-        # PASS embedding_function HERE so Chroma doesn't load default ONNX models
         collection = client.get_or_create_collection(
             name="hr_policies",
             embedding_function=embedding_fn
@@ -161,6 +134,7 @@ def init_chroma():
         logger.info("[STARTUP] ✅ ChromaDB initialized successfully with Gemini Embeddings")
     except Exception as e:
         logger.error(f"[STARTUP] ❌ ChromaDB initialization failed: {e}")
+        logger.error(traceback.format_exc())
 
 
 def router(employee, message):

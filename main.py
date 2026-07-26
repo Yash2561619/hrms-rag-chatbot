@@ -11,6 +11,7 @@ import sys
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
 os.environ["ORT_DISABLE_CPU_OPTIMIZATION"] = "1"
+os.environ["ONNXRUNTIME_EXECUTION_PROVIDERS"] = "CPUExecutionProvider"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Add project root to Python path
@@ -117,21 +118,36 @@ def init_gemini():
         logger.error('[STARTUP] ❌ GEMINI_API_KEY not set')
 
 
-def init_chroma():
-    """Initialize Ephemeral ChromaDB client with Gemini API embeddings."""
-    global collection
-    logger.info("[STARTUP] Step 2: Initializing ChromaDB...")
-    try:
-        client = chromadb.EphemeralClient()
+from chromadb.config import Settings
 
-        # Custom Gemini API Embedding function wrapper (Zero local ONNX/RAM)
+
+def init_chroma():
+    """Initialize Ephemeral ChromaDB without triggering ONNX Runtime default imports."""
+    global collection
+    logger.info("[STARTUP] Initializing ChromaDB with custom settings...")
+
+    try:
+        # 1. Initialize client with telemetry disabled in Settings
+        client = chromadb.EphemeralClient(
+            settings=Settings(
+                anonymized_telemetry=False,
+                allow_reset=True,
+                is_persistent=False,
+            )
+        )
+
+        # 2. Attach Gemini Embedding Function
         embedding_fn = LazyEmbeddingFunction(model_name="text-embedding-004")
 
+        # 3. Create collection with explicit embedding function
         collection = client.get_or_create_collection(
-            name="hr_policies",
-            embedding_function=embedding_fn
+            name="hr_policies", embedding_function=embedding_fn
         )
-        logger.info("[STARTUP] ✅ ChromaDB initialized successfully with Gemini Embeddings")
+
+        logger.info(
+            "[STARTUP] ✅ ChromaDB initialized successfully with Gemini Embeddings"
+        )
+
     except Exception as e:
         logger.error(f"[STARTUP] ❌ ChromaDB initialization failed: {e}")
         logger.error(traceback.format_exc())

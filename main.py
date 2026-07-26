@@ -122,25 +122,29 @@ os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 def init_chroma():
     """
-    Debug version:
-    - Tests whether ChromaDB client works.
-    - Does NOT use embedding_function.
+    DEBUG VERSION
+
+    Uses EphemeralClient (memory only) instead of PersistentClient.
+    This helps determine whether the crash is caused by the
+    persistent storage layer.
     """
 
     global collection
 
-    logger.info("[STARTUP] Initializing Chroma (DEBUG MODE)...")
+    logger.info("=" * 80)
+    logger.info("[STARTUP] Initializing Chroma (DEBUG)")
+    logger.info("=" * 80)
 
     try:
         # Step 1
-        logger.info("[STARTUP] Step 1: Creating ChromaDB PersistentClient...")
+        logger.info("[STARTUP] Step 1: Creating EphemeralClient...")
 
-        client = chromadb.PersistentClient(path="chroma_db")
+        client = chromadb.EphemeralClient()
 
-        logger.info("[STARTUP] ✅ Step 1 SUCCESS - PersistentClient created")
+        logger.info("[STARTUP] ✅ Step 1 SUCCESS - EphemeralClient created")
 
         # Step 2
-        logger.info("[STARTUP] Step 2: Creating/Opening collection...")
+        logger.info("[STARTUP] Step 2: Creating collection...")
 
         collection = client.get_or_create_collection(
             name="hr_policies"
@@ -148,7 +152,7 @@ def init_chroma():
 
         logger.info("[STARTUP] ✅ Step 2 SUCCESS - Collection created")
 
-        logger.info("[STARTUP] ✅ Chroma initialized successfully!")
+        logger.info("[STARTUP] ✅ Chroma initialized successfully")
 
     except Exception as e:
         logger.exception("[STARTUP] ❌ Chroma initialization failed")
@@ -400,11 +404,11 @@ logger.info("[STARTUP] ✅ Database initialized")
 logger.info("[STARTUP] Step 1: Initializing Gemini...")
 init_gemini()
 
-# logger.info("[STARTUP] Step 2: Initializing Chroma...")
-# init_chroma()
+logger.info("[STARTUP] Step 2: Initializing Chroma...")
+init_chroma()
 
-logger.info("[STARTUP] Step 2: Skipped Chroma for testing")
-collection = None
+# logger.info("[STARTUP] Step 2: Skipped Chroma for testing")
+# collection = None
 
 logger.info("=" * 80)
 logger.info("APPLICATION_STARTUP_COMPLETE ✅")

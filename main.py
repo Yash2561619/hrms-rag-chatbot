@@ -117,7 +117,9 @@ def init_gemini():
     else:
         logger.error('[STARTUP] ❌ GEMINI_API_KEY not set')
 
-
+# Disable ChromaDB's problematic components
+os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
 def init_chroma():
     """
     Initialize persistent Chroma collection with LAZY embedding.

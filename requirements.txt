@@ -3,6 +3,9 @@ Flask==3.0.0
 gunicorn==26.0.0
 Werkzeug==3.1.8
 
+# Fixed NumPy version for ChromaDB 0.4.24 compatibility
+numpy==1.26.4
+
 # AI & Database Services
 google-genai==2.13.0
 chromadb==0.4.24

@@ -131,8 +131,8 @@ def init_chroma():
     global collection
     logger.info("[STARTUP] Initializing ChromaDB safely...")
     try:
-        client = chromadb.EphemeralClient()
-        embedding_fn = LazyEmbeddingFunction(model_name="text-embedding-004")
+        client = chromadb.PersistentClient(path="chroma_db")
+        embedding_fn = LazyEmbeddingFunction(model_name="gemini-embedding-001")
         
         collection = client.get_or_create_collection(
             name="hr_policies",

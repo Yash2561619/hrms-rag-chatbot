@@ -204,50 +204,39 @@ def build_index():
             print(f"  • {pdf}")
 
     # Process required PDFs
+    # Process required PDFs with error guarding
     for filename in pdfs_to_process:
         s3_key = policy_records[filename]["s3_key"]
         print(f"\n[INFO] Downloading and processing: {filename} (key: {s3_key})")
 
         filepath = None
         try:
-            # Download file from S3 using real s3_key
+            # 1. Download temp file safely
             filepath = download_policy_temp(s3_key)
 
-            # Extract text
+            # 2. Extract text with OCR fallback
             text, used_ocr = extract_text_from_pdf(filepath)
 
             if not text or len(text.strip()) == 0:
-                print(
-                    "  [WARNING] OCR/Extraction failed or empty document. Skipping."
-                )
+                print(f"  [WARNING] Failed to extract text from {filename}. Skipping.")
                 continue
 
-            print(
-                f"  ✔ Extracted {len(text)} characters (Used OCR: {used_ocr})"
-            )
+            print(f"  ✔ Extracted {len(text)} characters (Used OCR: {used_ocr})")
 
-            # Split into chunks
+            # 3. Split into chunks
             chunks = splitter.split_text(text)
-
             if not chunks:
                 print("  [WARNING] No chunks produced. Skipping.")
                 continue
 
-            # Remove old chunks if this PDF is being updated
+            # 4. Remove existing chunks if updating
             existing = collection.get(where={"source": filename})
             existing_ids = existing.get("ids", []) if existing else []
-
             if existing_ids:
-                print(
-                    f"  🔄 UPDATING: Removing {len(existing_ids)} old chunks"
-                )
                 collection.delete(ids=existing_ids)
-            else:
-                print("  ✨ NEW: Adding new PDF")
 
-            # Generate IDs and metadata
+            # 5. Build IDs and metadata
             ids_list = [f"{filename}_{i}" for i in range(len(chunks))]
-
             metadatas = [
                 {
                     "source": filename,
@@ -261,15 +250,15 @@ def build_index():
                 for i in range(len(chunks))
             ]
 
-            # Upsert chunks into ChromaDB
+            # 6. Upsert into ChromaDB
             collection.upsert(
                 documents=chunks, ids=ids_list, metadatas=metadatas
             )
 
             total_chunks += len(chunks)
-            print(f"  ✔ Upserted {len(chunks)} chunks")
+            print(f"  ✔ Upserted {len(chunks)} chunks for {filename}")
 
-            # Update registry data for current file
+            # 7. Update registry record
             registry[filename] = {
                 "hash": current_pdfs[filename],
                 "chunks": len(chunks),
@@ -277,11 +266,13 @@ def build_index():
             }
 
         except Exception as e:
-            print(f"  [ERROR] Failed to process {filename}: {str(e)}")
+            # THIS IS THE ERROR GUARD: Log error and keep running!
+            print(f"  ❌ [ERROR] Failed to process {filename}: {str(e)}")
+            logger.exception(f"INDEX_FILE_FAILED | file={filename}")
             continue
 
         finally:
-            # Clean up local temporary PDF file after indexing
+            # Always clean up temporary files from disk
             if filepath and os.path.exists(filepath):
                 try:
                     os.remove(filepath)

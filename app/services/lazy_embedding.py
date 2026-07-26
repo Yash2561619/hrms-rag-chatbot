@@ -15,27 +15,15 @@ class LazyEmbeddingFunction(chromadb.EmbeddingFunction):
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
         self.model_name = model_name
         self._client = None
-        logger.info(
-            f"[EMBEDDING] Initialized Gemini Embedding Function with model: {self.model_name}"
-        )
 
     def name(self) -> str:
-        """Required by modern ChromaDB to validate custom embedding functions."""
         return "lazy_gemini_embedding"
 
     def _ensure_client(self):
         if not self._client:
             if not self.api_key:
-                logger.error("[EMBEDDING] ❌ GEMINI_API_KEY missing")
-                raise ValueError("GEMINI_API_KEY is required")
-            try:
-                self._client = genai.Client(api_key=self.api_key)
-                logger.info(
-                    "[EMBEDDING] ✅ Gemini client initialized for embeddings"
-                )
-            except Exception as e:
-                logger.error(f"[EMBEDDING] ❌ Failed to init Gemini client: {e}")
-                raise
+                raise ValueError("GEMINI_API_KEY is missing")
+            self._client = genai.Client(api_key=self.api_key)
 
     def __call__(self, input: list[str]) -> list[list[float]]:
         self._ensure_client()
@@ -46,8 +34,15 @@ class LazyEmbeddingFunction(chromadb.EmbeddingFunction):
             input = [input]
 
         try:
+            # Ensure model name starts with models/ if using genai.Client
+            target_model = (
+                self.model_name
+                if self.model_name.startswith("models/")
+                else f"models/{self.model_name}"
+            )
+
             response = self._client.models.embed_content(
-                model=self.model_name, contents=input
+                model=target_model, contents=input
             )
             return [e.values for e in response.embeddings]
         except Exception as e:

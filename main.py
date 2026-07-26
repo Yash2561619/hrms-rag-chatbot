@@ -332,25 +332,40 @@ def serve_video(filename):
 # ============================================================================
 # STARTUP SEQUENCE
 # ============================================================================
+_initialized = False
 
-logger.info("=" * 80)
-logger.info("STARTING WhatsApp HR Assistant")
-logger.info("=" * 80)
+@app.before_request
+def startup_initialization():
+    """Run database, Gemini, and Chroma initializations once before handling the first HTTP request.
+    This allows Gunicorn to bind to Render's port instantly on startup.
+    """
+    global _initialized
+    if not _initialized:
+        logger.info("=" * 80)
+        logger.info("STARTING WhatsApp HR Assistant (Background Startup)")
+        logger.info("=" * 80)
 
-logger.info("[STARTUP] Initializing database...")
-initialize_database()
-logger.info("[STARTUP] ✅ Database initialized")
+        logger.info("[STARTUP] Initializing database...")
+        try:
+            initialize_database()
+            logger.info("[STARTUP] ✅ Database initialized")
+        except Exception as e:
+            logger.error(f"[STARTUP] ❌ Database init error: {e}")
 
-logger.info("[STARTUP] Step 1: Initializing Gemini...")
-init_gemini()
+        logger.info("[STARTUP] Step 1: Initializing Gemini...")
+        init_gemini()
 
-logger.info("[STARTUP] Step 2: Initializing Chroma...")
-init_chroma()
+        logger.info("[STARTUP] Step 2: Initializing Chroma...")
+        init_chroma()
 
-logger.info("=" * 80)
-logger.info("APPLICATION_STARTUP_COMPLETE ✅")
-logger.info(f"Collection status: {collection}")
-logger.info("=" * 80)
+        logger.info("=" * 80)
+        logger.info("APPLICATION_STARTUP_COMPLETE ✅")
+        logger.info(f"Collection status: {collection}")
+        logger.info("=" * 80)
+
+        _initialized = True
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)

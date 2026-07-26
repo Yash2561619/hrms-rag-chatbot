@@ -943,26 +943,23 @@ def get_training_video_by_category(category):
 
 
 def save_policy_file(file_name, s3_key, version, file_hash):
-    """Insert or update policy records without wiping original creation date."""
+    """Save or update policy metadata in SQLite matching table schema."""
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute(
-        """
+    cursor.execute("""
         INSERT INTO policy_files (file_name, s3_key, version, file_hash)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(file_name) DO UPDATE SET
             s3_key = excluded.s3_key,
             version = excluded.version,
             file_hash = excluded.file_hash,
-            updated_at = CURRENT_TIMESTAMP
-    """,
-        (file_name, s3_key, version, file_hash),
-    )
+            upload_time = CURRENT_TIMESTAMP,
+            status = 'active'
+    """, (file_name, s3_key, version, file_hash))
 
     conn.commit()
     conn.close()
-
 
 def get_all_policy_files():
     """Retrieve all policy records as dictionary objects."""

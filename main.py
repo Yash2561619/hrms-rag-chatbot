@@ -9,8 +9,11 @@ import sys
 import traceback
 
 # Prevent ChromaDB telemetry from making external calls at startup
-os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
+os.environ["ALLOW_RESET"] = "TRUE"
+# Disable ONNXRuntime execution providers that trigger AVX crashes on cloud VMs
+os.environ["ORT_DISABLE_CPU_OPTIMIZATION"] = "1"
 
 # Add project root to Python path (Render/Linux fix)
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))

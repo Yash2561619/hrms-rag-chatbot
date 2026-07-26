@@ -121,42 +121,20 @@ def init_gemini():
 os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 def init_chroma():
-    """
-    DEBUG VERSION
-
-    Uses EphemeralClient (memory only) instead of PersistentClient.
-    This helps determine whether the crash is caused by the
-    persistent storage layer.
-    """
-
     global collection
 
-    logger.info("=" * 80)
-    logger.info("[STARTUP] Initializing Chroma (DEBUG)")
-    logger.info("=" * 80)
+    import chromadb
 
-    try:
-        # Step 1
-        logger.info("[STARTUP] Step 1: Creating EphemeralClient...")
+    logger.info("Creating EphemeralClient...")
+    client = chromadb.EphemeralClient()
 
-        client = chromadb.EphemeralClient()
+    logger.info("Creating collection...")
+    collection = client.get_or_create_collection(
+        name="hr_policies"
+    )
 
-        logger.info("[STARTUP] ✅ Step 1 SUCCESS - EphemeralClient created")
+    logger.info("✅ Chroma initialized")
 
-        # Step 2
-        logger.info("[STARTUP] Step 2: Creating collection...")
-
-        collection = client.get_or_create_collection(
-            name="hr_policies"
-        )
-
-        logger.info("[STARTUP] ✅ Step 2 SUCCESS - Collection created")
-
-        logger.info("[STARTUP] ✅ Chroma initialized successfully")
-
-    except Exception as e:
-        logger.exception("[STARTUP] ❌ Chroma initialization failed")
-        collection = None
 
 def router(employee, message):
     intent = classify_intent(message)

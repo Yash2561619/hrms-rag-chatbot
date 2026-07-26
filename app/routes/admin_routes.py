@@ -1,63 +1,58 @@
-import os
 import logging
-from database import get_connection
+import os
+from functools import wraps
 
 from flask import (
     Blueprint,
+    current_app,
+    flash,
+    redirect,
     render_template,
     request,
-    redirect,
-    url_for,
-    flash,
     session,
-    current_app,
-    send_file,
-    send_from_directory
+    url_for,
 )
 from werkzeug.utils import secure_filename
-from functools import wraps
-from app.services.auth_service import authenticate_admin
-from database import save_policy_file
-# Database functions
-from database import (
-    get_dashboard_stats,
-    get_leave_status_counts,
-    get_monthly_leave_data,
-    get_department_employee_counts,
-    get_recent_activities,
-    get_all_employees,
-    add_employee,
-    update_employee,
-    delete_employee,
-    get_employee,
-    get_all_leave_requests,
-    get_leave_details,
-    can_approve_leave,
-    update_leave_status,
-    save_salary_slip,
-    get_all_salary_slips,
-    log_activity
-)
-from flask import current_app
-# Validation
-from validators import validate_phone, ValidationError
 
-# WhatsApp service
+from app.services.auth_service import authenticate_admin
+from app.services.s3_service import (
+    delete_file_from_s3,
+    generate_presigned_url,
+    upload_policy_to_s3,
+    upload_salary_to_s3,
+    upload_video_to_s3,
+)
 from app.services.whatsapp_service import send_text
 from database import (
+    add_employee,
+    can_approve_leave,
+    delete_employee,
+    get_all_employees,
+    get_all_leave_requests,
+    get_all_policy_files,
+    get_all_salary_slips,
+    get_all_training_videos,
+    get_connection,
+    get_dashboard_stats,
+    get_department_employee_counts,
+    get_employee,
+    get_leave_details,
+    get_leave_status_counts,
+    get_monthly_leave_data,
+    get_recent_activities,
+    log_activity,
+    save_policy_file,
+    save_salary_slip,
     save_training_video,
-    get_all_training_videos
+    update_employee,
+    update_leave_status,
 )
-from app.services.s3_service import upload_video_to_s3
-from app.services.s3_service import generate_presigned_url
-from app.services.s3_service import delete_file_from_s3
-# Chroma rebuild
-
+from scripts.update_db import build_index, get_pdf_hash, get_pdf_version
+from validators import ValidationError, validate_phone
 
 logger = logging.getLogger(__name__)
 
 admin_bp = Blueprint('admin', __name__)
-
 
 # =====================================================
 # DASHBOARD
@@ -715,13 +710,13 @@ def upload_salary():
 @admin_bp.route('/policy-management', methods=['GET', 'POST'])
 @login_required
 def policy_management():
-    """Manage HR policies"""
-    
-    POLICY_FOLDER = 'uploads/policies'
+    """Manage HR policies with S3 storage and ChromaDB indexing."""
+    POLICY_FOLDER = current_app.config.get(
+        'POLICY_FOLDER', 'uploads/policies'
+    )
     os.makedirs(POLICY_FOLDER, exist_ok=True)
 
     if request.method == 'POST':
-        
         if 'policy' not in request.files:
             flash('❌ No file selected')
             return redirect(url_for('admin.policy_management'))
@@ -737,79 +732,65 @@ def policy_management():
             return redirect(url_for('admin.policy_management'))
 
         try:
-            from app.services.s3_service import upload_policy_to_s3
-
             filename = secure_filename(file.filename)
+            temp_filepath = os.path.join(POLICY_FOLDER, filename)
 
-# Upload PDF directly to S3
-            s3_key = upload_policy_to_s3(file, filename)
-            from scripts.utils import get_pdf_hash, get_pdf_version
+            # Save file locally temporarily to calculate MD5 hash
+            file.save(temp_filepath)
+
+            file_hash = get_pdf_hash(temp_filepath)
+            version = get_pdf_version(filename)
+
+            # Re-open file stream to upload to S3
+            with open(temp_filepath, 'rb') as upload_file:
+                s3_key = upload_policy_to_s3(upload_file, filename)
 
             save_policy_file(
-              file_name=filename,
-              s3_key=s3_key,
-              version=get_pdf_version(filename),
-              file_hash=get_pdf_hash(filepath)
-)
+                file_name=filename,
+                s3_key=s3_key,
+                version=version,
+                file_hash=file_hash,
+            )
+
             logger.info(f"POLICY_UPLOADED_TO_S3 | key={s3_key}")
-            from scripts.update_db import build_index
+
+            # Rebuild Chroma vector database
             build_index()
 
+            # Clean up local temporary file
+            if os.path.exists(temp_filepath):
+                os.remove(temp_filepath)
 
             log_activity(f'📚 Policy uploaded: {filename}')
             flash('✅ Policy uploaded and indexed successfully!')
 
             return redirect(url_for('admin.policy_management'))
 
-        except Exception as e:
+        except Exception:
             logger.exception('UPLOAD_POLICY_ERROR')
             flash('❌ Failed to upload policy')
 
-    # Get list of policies
-    policies = []
-    if os.path.exists(POLICY_FOLDER):
-        policies = sorted(
-            [f for f in os.listdir(POLICY_FOLDER) if f.endswith('.pdf')],
-            reverse=True
-        )
-
-    return render_template(
-        'policy_management.html',
-        policies=policies
-    )
+    policies = get_all_policy_files()
+    return render_template('policy_management.html', policies=policies)
 
 
 @admin_bp.route('/delete-policy/<filename>')
 @login_required
 def delete_policy(filename):
-    """Delete policy file"""
-    
-    POLICY_FOLDER = current_app.config['POLICY_FOLDER']
-    
+    """Delete policy file from S3 and rebuild Chroma index."""
     try:
-        filepath = os.path.join(POLICY_FOLDER, secure_filename(filename))
-
-        if not os.path.exists(filepath):
-            flash('❌ File not found')
-            return redirect(url_for('admin.policy_management'))
-
-        from app.services.s3_service import delete_file_from_s3
-
         s3_key = f"policies/{filename}"
 
         delete_file_from_s3(s3_key)
-
         logger.info(f"POLICY_DELETED_FROM_S3 | key={s3_key}")
 
-        from scripts.update_db import build_index
-
-        # Rebuild index to remove chunks
+        # Rebuild index to remove chunks from Chroma
         build_index()
 
         log_activity(f'📚 Policy deleted: {filename}')
         flash(f'✅ {filename} deleted successfully!')
 
-    except Exception as e:
+    except Exception:
         logger.exception('DELETE_POLICY_ERROR')
         flash('❌ Failed to delete policy')
 
@@ -819,22 +800,19 @@ def delete_policy(filename):
 @admin_bp.route("/download-policy/<filename>")
 @login_required
 def download_policy(filename):
-
     s3_key = f"policies/{filename}"
-
     url = generate_presigned_url(s3_key)
-
     return redirect(url)
+
 
 @admin_bp.route("/view-policy/<filename>")
 @login_required
 def view_policy(filename):
-
     s3_key = f"policies/{filename}"
-
     url = generate_presigned_url(s3_key)
-
     return redirect(url)
+
+
 @admin_bp.route("/view-salary/<int:id>")
 @login_required
 def view_salary_route(id):

@@ -943,20 +943,31 @@ def get_training_video_by_category(category):
 
 
 def save_policy_file(file_name, s3_key, version, file_hash):
+    """Insert or update policy records without wiping original creation date."""
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
-        INSERT OR REPLACE INTO policy_files
-        (file_name, s3_key, version, file_hash)
+    cursor.execute(
+        """
+        INSERT INTO policy_files (file_name, s3_key, version, file_hash)
         VALUES (?, ?, ?, ?)
-    """, (file_name, s3_key, version, file_hash))
+        ON CONFLICT(file_name) DO UPDATE SET
+            s3_key = excluded.s3_key,
+            version = excluded.version,
+            file_hash = excluded.file_hash,
+            updated_at = CURRENT_TIMESTAMP
+    """,
+        (file_name, s3_key, version, file_hash),
+    )
 
     conn.commit()
     conn.close()
 
+
 def get_all_policy_files():
+    """Retrieve all policy records as dictionary objects."""
     conn = get_connection()
+    conn.row_factory = sqlite3.Row  # Enables dict-like key access
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -965,9 +976,10 @@ def get_all_policy_files():
                version,
                file_hash
         FROM policy_files
+        ORDER BY id DESC
     """)
 
-    rows = cursor.fetchall()
+    rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
 
     return rows

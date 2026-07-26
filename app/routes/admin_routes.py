@@ -777,14 +777,22 @@ def policy_management():
 @admin_bp.route('/delete-policy/<filename>')
 @login_required
 def delete_policy(filename):
-    """Delete policy file from S3 and rebuild Chroma index."""
+    """Delete policy file from S3, remove DB record, and rebuild Chroma index."""
     try:
         s3_key = f"policies/{filename}"
 
+        # 1. Delete from S3
         delete_file_from_s3(s3_key)
         logger.info(f"POLICY_DELETED_FROM_S3 | key={s3_key}")
 
-        # Rebuild index to remove chunks from Chroma
+        # 2. Delete record from SQLite FIRST so build_index doesn't try to download it
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM policy_files WHERE file_name=?", (filename,))
+        conn.commit()
+        conn.close()
+
+        # 3. Rebuild index with remaining policies
         build_index()
 
         log_activity(f'📚 Policy deleted: {filename}')

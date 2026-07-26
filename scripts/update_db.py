@@ -97,27 +97,17 @@ def build_index():
 
     client = chromadb.PersistentClient(path="chroma_db")
 
-    # Get or create collection
-    try:
-        collection = client.get_or_create_collection(
-            "hr_policies", embedding_function=ef
-        )
-        print("[INFO] Using existing collection (preserving old chunks)")
-    except Exception:
-        collection = client.create_collection(
-            "hr_policies", embedding_function=ef
-        )
-        print("[INFO] Created new collection")
+    # Get or create collection directly without redundant try-except fallback
+    collection = client.get_or_create_collection(
+        "hr_policies", embedding_function=ef
+    )
+    print("[INFO] Using or created ChromaDB collection 'hr_policies'")
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=40)
 
     # =========================================================================
     # STEP 1: Get current PDFs in database & load local registry
     # =========================================================================
-    if not os.path.exists(POLICY_FOLDER):
-        print(f"[ERROR] Policy folder '{POLICY_FOLDER}' does not exist.")
-        return
-
     registry = load_pdf_registry()
 
     current_pdfs = {}
@@ -125,13 +115,23 @@ def build_index():
 
     rows = get_all_policy_files()
 
-    for file_name, s3_key, version, file_hash in rows:
-        current_pdfs[file_name] = file_hash
-        policy_records[file_name] = {
-            "s3_key": s3_key,
-            "version": version,
-            "hash": file_hash,
-        }
+    # Safely handle both Dictionary rows (dict) and Tuple rows (tuple)
+    for row in rows:
+        if isinstance(row, dict):
+            file_name = row.get("file_name")
+            s3_key = row.get("s3_key")
+            version = row.get("version", "1.0")
+            file_hash = row.get("file_hash", "")
+        else:
+            file_name, s3_key, version, file_hash = row
+
+        if file_name and s3_key:
+            current_pdfs[file_name] = file_hash
+            policy_records[file_name] = {
+                "s3_key": s3_key,
+                "version": version,
+                "hash": file_hash,
+            }
 
     print(f"\n[INFO] Current PDFs in database: {len(current_pdfs)}")
     for pdf in current_pdfs:
@@ -175,7 +175,7 @@ def build_index():
                 del registry[deleted_pdf]
 
     if not current_pdfs:
-        print("[WARNING] No policy PDFs found in target folder.")
+        print("[WARNING] No active policy records found in database.")
         save_pdf_registry(registry)
         return
 
@@ -206,10 +206,13 @@ def build_index():
     # Process required PDFs
     for filename in pdfs_to_process:
         s3_key = policy_records[filename]["s3_key"]
-        filepath = download_policy_temp(s3_key)
-        print(f"\n[INFO] Processing: {filename}")
+        print(f"\n[INFO] Downloading and processing: {filename} (key: {s3_key})")
 
+        filepath = None
         try:
+            # Download file from S3 using real s3_key
+            filepath = download_policy_temp(s3_key)
+
             # Extract text
             text, used_ocr = extract_text_from_pdf(filepath)
 
@@ -248,7 +251,7 @@ def build_index():
             metadatas = [
                 {
                     "source": filename,
-                    "version": get_pdf_version(filename),
+                    "version": policy_records[filename]["version"],
                     "upload_date": datetime.now().isoformat(),
                     "status": "active",
                     "chunk_index": i,
@@ -276,6 +279,14 @@ def build_index():
         except Exception as e:
             print(f"  [ERROR] Failed to process {filename}: {str(e)}")
             continue
+
+        finally:
+            # Clean up local temporary PDF file after indexing
+            if filepath and os.path.exists(filepath):
+                try:
+                    os.remove(filepath)
+                except OSError:
+                    pass
 
     save_pdf_registry(registry)
 

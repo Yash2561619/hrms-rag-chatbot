@@ -93,7 +93,7 @@ def build_index():
     print("=" * 80)
 
     # Use Gemini API embedding function
-    ef = LazyEmbeddingFunction(model_name="text-embedding-004")
+    ef = LazyEmbeddingFunction(model_name="gemini-embedding-001")
 
     client = chromadb.PersistentClient(path="chroma_db")
 
@@ -299,7 +299,7 @@ def display_index_status():
     global collection
 
     if collection is None:
-        ef = LazyEmbeddingFunction(model_name="text-embedding-004")
+        ef = LazyEmbeddingFunction(model_name="gemini-embedding-001")
         client = chromadb.PersistentClient(path="chroma_db")
         try:
             collection = client.get_or_create_collection(

@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 
 class LazyEmbeddingFunction(chromadb.EmbeddingFunction):
 
-    def __init__(self, api_key=None, model_name="text-embedding-004"):
-        # Ensure model name does not contain "models/" prefix
+    def __init__(self, api_key=None, model_name="gemini-embedding-001"):
+        # Default to the active gemini-embedding-001 model
         self.model_name = model_name.replace("models/", "")
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
         self._client = None
@@ -46,7 +46,6 @@ class LazyEmbeddingFunction(chromadb.EmbeddingFunction):
             input = [input]
 
         try:
-            # Pass clean model name "text-embedding-004"
             response = self._client.models.embed_content(
                 model=self.model_name, contents=input
             )

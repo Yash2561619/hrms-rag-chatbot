@@ -32,6 +32,10 @@ from config import Config
 from database import get_all_policy_files
 from scripts.step1_extract import extract_text_from_pdf
 
+from google import genai
+api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+gemini_client = genai.Client(api_key=api_key) if api_key else None
+
 logger = logging.getLogger(__name__)
 
 POLICY_FOLDER = Config.POLICY_FOLDER
@@ -215,7 +219,8 @@ def build_index():
             filepath = download_policy_temp(s3_key)
 
             # 2. Extract text with OCR fallback
-            text, used_ocr = extract_text_from_pdf(filepath)
+            text, used_ocr = extract_text_from_pdf(
+                filepath,gemini_client=gemini_client)
 
             if not text or len(text.strip()) == 0:
                 print(f"  [WARNING] Failed to extract text from {filename}. Skipping.")

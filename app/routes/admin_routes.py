@@ -722,6 +722,16 @@ def upload_salary():
 # POLICY MANAGEMENT
 # =====================================================
 
+def run_background_index():
+    """Helper function to run vector indexing in a completely detached thread."""
+    try:
+        logger.info("BACKGROUND_INDEX_START | Triggered from admin upload")
+        build_index()
+        logger.info("BACKGROUND_INDEX_COMPLETE")
+    except Exception as e:
+        logger.error(f"BACKGROUND_INDEX_FAILED | error={e}")
+
+
 @admin_bp.route("/policy-management", methods=["GET", "POST"])
 @login_required
 def policy_management():
@@ -733,17 +743,17 @@ def policy_management():
 
     if request.method == "POST":
         if "policy" not in request.files:
-            flash("❌ No file selected")
+            flash("❌ No file selected", "danger")
             return redirect(url_for("admin.policy_management"))
 
         file = request.files["policy"]
 
         if not file or file.filename == "":
-            flash("❌ No file selected")
+            flash("❌ No file selected", "danger")
             return redirect(url_for("admin.policy_management"))
 
         if not file.filename.lower().endswith(".pdf"):
-            flash("❌ Only PDF files allowed")
+            flash("❌ Only PDF files allowed", "danger")
             return redirect(url_for("admin.policy_management"))
 
         temp_filepath = None
@@ -751,7 +761,7 @@ def policy_management():
             filename = secure_filename(file.filename)
             temp_filepath = os.path.join(POLICY_FOLDER, filename)
 
-            # 1. Save locally temporarily to compute MD5 hash
+            # 1. Save file locally temporarily to calculate hash
             file.save(temp_filepath)
 
             file_hash = get_pdf_hash(temp_filepath)
@@ -761,7 +771,7 @@ def policy_management():
             with open(temp_filepath, "rb") as upload_file:
                 s3_key = upload_policy_to_s3(upload_file, filename)
 
-            # 3. Save metadata to SQLite DB
+            # 3. Save metadata record to database
             save_policy_file(
                 file_name=filename,
                 s3_key=s3_key,
@@ -771,22 +781,28 @@ def policy_management():
 
             logger.info(f"POLICY_UPLOADED_TO_S3 | key={s3_key}")
 
-            # 4. Trigger background indexing (Non-blocking)
-            threading.Thread(target=build_index, daemon=True).start()
+            # 4. START BACKGROUND THREAD (This releases the web response immediately!)
+            bg_thread = threading.Thread(
+                target=run_background_index, daemon=True
+            )
+            bg_thread.start()
 
             log_activity(f"📚 Policy uploaded: {filename}")
 
             flash(
-                "✅ Policy uploaded! Knowledge base is updating in the background."
+                "✅ Policy uploaded! Knowledge base is updating in the background.",
+                "success",
             )
+
+            # 5. RETURN IMMEDIATELY (Prevents Gunicorn 120s timeout)
             return redirect(url_for("admin.policy_management"))
 
-        except Exception:
-            logger.exception("UPLOAD_POLICY_ERROR")
-            flash("❌ Failed to upload policy")
+        except Exception as e:
+            logger.exception(f"UPLOAD_POLICY_ERROR | error={e}")
+            flash("❌ Failed to upload policy", "danger")
 
         finally:
-            # Clean up local temporary file immediately so build_index thread has clean access
+            # Clean up local temp file
             if temp_filepath and os.path.exists(temp_filepath):
                 try:
                     os.remove(temp_filepath)
@@ -795,7 +811,6 @@ def policy_management():
 
     policies = get_all_policy_files()
     return render_template("policy_management.html", policies=policies)
-
 
 @admin_bp.route("/delete-policy/<path:filename>", methods=["GET", "POST"])
 def delete_policy(filename):

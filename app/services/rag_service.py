@@ -11,7 +11,7 @@ import chromadb
 from google.genai.errors import ClientError
 
 from app.services.lazy_embedding import LazyEmbeddingFunction
-f
+
 from app.services.s3_service import sync_chroma_from_s3
 from app.services.whatsapp_service import send_text
 from config import Config

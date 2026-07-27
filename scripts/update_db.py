@@ -15,6 +15,9 @@ import logging
 import os
 import re
 import sys
+
+import gc
+
 from typing import Any, Dict, Optional
 
 # Prevent ChromaDB telemetry
@@ -283,6 +286,8 @@ def build_index():
             collection.upsert(
                 documents=chunks, ids=ids_list, metadatas=metadatas
             )
+            del text, chunks, metadatas, ids_list
+            gc.collect()
 
             total_chunks += len(chunks)
             print(f"  ✔ Upserted {len(chunks)} chunks for {filename}")
@@ -307,6 +312,7 @@ def build_index():
                     os.remove(filepath)
                 except OSError:
                     pass
+            gc.collect()
 
     save_pdf_registry(registry)
 

@@ -721,15 +721,32 @@ def upload_salary():
 # =====================================================
 # POLICY MANAGEMENT
 # =====================================================
+import gc
+import logging
+import os
+import threading
+import time
 
-def run_background_index():
-    """Helper function to run vector indexing in a completely detached thread."""
+logger = logging.getLogger(__name__)
+
+
+def run_background_index_safe():
+    """Waits 1 second for the HTTP request to completely release RAM & file handles,
+
+    then cleans garbage and builds the vector index.
+    """
+    time.sleep(1)  # Allow HTTP response to flush completely
+    gc.collect()  # Clean up memory from file read operations
     try:
         logger.info("BACKGROUND_INDEX_START | Triggered from admin upload")
+        from scripts.update_db import build_index
+
         build_index()
         logger.info("BACKGROUND_INDEX_COMPLETE")
     except Exception as e:
         logger.error(f"BACKGROUND_INDEX_FAILED | error={e}")
+    finally:
+        gc.collect()  # Extra garbage collection pass
 
 
 @admin_bp.route("/policy-management", methods=["GET", "POST"])
@@ -781,11 +798,10 @@ def policy_management():
 
             logger.info(f"POLICY_UPLOADED_TO_S3 | key={s3_key}")
 
-            # 4. START BACKGROUND THREAD (This releases the web response immediately!)
-            bg_thread = threading.Thread(
-                target=run_background_index, daemon=True
-            )
-            bg_thread.start()
+            # 4. START SAFE BACKGROUND THREAD HERE
+            threading.Thread(
+                target=run_background_index_safe, daemon=True
+            ).start()
 
             log_activity(f"📚 Policy uploaded: {filename}")
 
@@ -811,6 +827,7 @@ def policy_management():
 
     policies = get_all_policy_files()
     return render_template("policy_management.html", policies=policies)
+
 
 @admin_bp.route("/delete-policy/<path:filename>", methods=["GET", "POST"])
 def delete_policy(filename):

@@ -722,124 +722,97 @@ def upload_salary():
 # =====================================================
 # POLICY MANAGEMENT
 # =====================================================
-import gc
-import logging
-import os
-import threading
-import time
-import subprocess
-import sys
 
 
 
 
-def trigger_detached_build_index():
-    """Spawns update_db.py in a detached OS process completely independent of Gunicorn.
 
-    This prevents Gunicorn from tracking or killing the indexing script with
-    WORKER TIMEOUT.
-    """
-    try:
-        python_executable = sys.executable
+from app.services.s3_service import sync_chroma_from_s3, upload_policy_to_s3
+from database import get_all_policy_files, log_activity, save_policy_file
 
-        # Get absolute path to scripts/update_db.py relative to project root
-        project_root = os.path.abspath(
-            os.path.join(current_app.root_path, "..")
-        )
-        script_path = os.path.join(project_root, "scripts", "update_db.py")
-
-        if not os.path.exists(script_path):
-            # Fallback if update_db.py is in the root directory
-            script_path = os.path.join(project_root, "update_db.py")
-
-        # Launch detached process
-        subprocess.Popen(
-            [python_executable, script_path],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,  # Fully detaches process from Gunicorn worker
-        )
-        logger.info("DETACHED_INDEX_PROCESS_STARTED")
-    except Exception as e:
-        logger.error(f"FAILED_TO_START_INDEX_PROCESS | error={e}")
 
 
 @admin_bp.route("/policy-management", methods=["GET", "POST"])
 @login_required
 def policy_management():
-    """Manage HR policies with S3 storage and background ChromaDB indexing."""
-    POLICY_FOLDER = current_app.config.get(
-        "POLICY_FOLDER", "uploads/policies"
-    )
-    os.makedirs(POLICY_FOLDER, exist_ok=True)
+  """Manage HR policies with S3 storage and S3-based ChromaDB vector sync."""
+  POLICY_FOLDER = current_app.config.get("POLICY_FOLDER", "uploads/policies")
+  os.makedirs(POLICY_FOLDER, exist_ok=True)
 
-    if request.method == "POST":
-        if "policy" not in request.files:
-            flash("❌ No file selected", "danger")
-            return redirect(url_for("admin.policy_management"))
+  if request.method == "POST":
+    if "policy" not in request.files:
+      flash("❌ No file selected", "danger")
+      return redirect(url_for("admin.policy_management"))
 
-        file = request.files["policy"]
+    file = request.files["policy"]
 
-        if not file or file.filename == "":
-            flash("❌ No file selected", "danger")
-            return redirect(url_for("admin.policy_management"))
+    if not file or file.filename == "":
+      flash("❌ No file selected", "danger")
+      return redirect(url_for("admin.policy_management"))
 
-        if not file.filename.lower().endswith(".pdf"):
-            flash("❌ Only PDF files allowed", "danger")
-            return redirect(url_for("admin.policy_management"))
+    if not file.filename.lower().endswith(".pdf"):
+      flash("❌ Only PDF files allowed", "danger")
+      return redirect(url_for("admin.policy_management"))
 
-        temp_filepath = None
+    temp_filepath = None
+    try:
+      filename = secure_filename(file.filename)
+      temp_filepath = os.path.join(POLICY_FOLDER, filename)
+
+      # 1. Save file locally temporarily to calculate hash
+      file.save(temp_filepath)
+
+      file_hash = get_pdf_hash(temp_filepath)
+      version = get_pdf_version(filename)
+
+      # 2. Upload file stream to S3
+      with open(temp_filepath, "rb") as upload_file:
+        s3_key = upload_policy_to_s3(upload_file, filename)
+
+      # 3. Save metadata record to database
+      save_policy_file(
+          file_name=filename,
+          s3_key=s3_key,
+          version=version,
+          file_hash=file_hash,
+      )
+
+      logger.info(f"POLICY_UPLOADED_TO_S3 | key={s3_key}")
+
+      # 4. TRY SYNCING RECENT VECTOR DB FROM S3
+      # (If a prebuilt index exists on S3, this pulls it instantly into Render without high RAM usage)
+      synced = sync_chroma_from_s3()
+
+      log_activity(f"📚 Policy uploaded to S3: {filename}")
+
+      if synced:
+        flash(
+            "✅ Policy uploaded to S3! Vector database synced from S3.",
+            "success",
+        )
+      else:
+        flash(
+            "✅ Policy uploaded to S3! Please run your Colab notebook to re-index and publish the new knowledge base.",
+            "info",
+        )
+
+      # 5. RETURN IMMEDIATELY (Fast response, zero Gunicorn timeouts)
+      return redirect(url_for("admin.policy_management"))
+
+    except Exception as e:
+      logger.exception(f"UPLOAD_POLICY_ERROR | error={e}")
+      flash("❌ Failed to upload policy", "danger")
+
+    finally:
+      # Clean up local temp file
+      if temp_filepath and os.path.exists(temp_filepath):
         try:
-            filename = secure_filename(file.filename)
-            temp_filepath = os.path.join(POLICY_FOLDER, filename)
+          os.remove(temp_filepath)
+        except OSError:
+          pass
 
-            # 1. Save file locally temporarily to calculate hash
-            file.save(temp_filepath)
-
-            file_hash = get_pdf_hash(temp_filepath)
-            version = get_pdf_version(filename)
-
-            # 2. Upload file stream to S3
-            with open(temp_filepath, "rb") as upload_file:
-                s3_key = upload_policy_to_s3(upload_file, filename)
-
-            # 3. Save metadata record to database
-            save_policy_file(
-                file_name=filename,
-                s3_key=s3_key,
-                version=version,
-                file_hash=file_hash,
-            )
-
-            logger.info(f"POLICY_UPLOADED_TO_S3 | key={s3_key}")
-
-            # 4. TRIGGER DETACHED PROCESS (Replaces threading.Thread)
-            trigger_detached_build_index()
-
-            log_activity(f"📚 Policy uploaded: {filename}")
-
-            flash(
-                "✅ Policy uploaded! Knowledge base is updating in the background.",
-                "success",
-            )
-
-            # 5. RETURN IMMEDIATELY
-            return redirect(url_for("admin.policy_management"))
-
-        except Exception as e:
-            logger.exception(f"UPLOAD_POLICY_ERROR | error={e}")
-            flash("❌ Failed to upload policy", "danger")
-
-        finally:
-            # Clean up local temp file
-            if temp_filepath and os.path.exists(temp_filepath):
-                try:
-                    os.remove(temp_filepath)
-                except OSError:
-                    pass
-
-    policies = get_all_policy_files()
-    return render_template("policy_management.html", policies=policies)
+  policies = get_all_policy_files()
+  return render_template("policy_management.html", policies=policies)
 
 @admin_bp.route("/delete-policy/<path:filename>", methods=["GET", "POST"])
 def delete_policy(filename):

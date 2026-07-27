@@ -1,8 +1,10 @@
-"""
-WhatsApp HR Assistant - Main Flask Application (OPTIMIZED FOR RENDER)
-Webhook server with Gemini API embeddings to fit in 512 MB RAM and avoid ONNX crashes.
+"""WhatsApp HR Assistant - Main Flask Application (OPTIMIZED FOR RENDER)
+
+Webhook server with Gemini API embeddings to fit in 512 MB RAM and avoid ONNX
+crashes.
 """
 
+import logging
 import os
 import sys
 import threading
@@ -15,17 +17,16 @@ os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
 
 class DummyONNX(ModuleType):
 
-    def __getattr__(self, name):
-        return None
+  def __getattr__(self, name):
+    return None
 
 
 sys.modules["onnxruntime"] = DummyONNX("onnxruntime")
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+  sys.path.insert(0, PROJECT_ROOT)
 
-import logging
 from flask import Flask, request, send_from_directory
 import google.genai as genai
 
@@ -42,6 +43,7 @@ from app.services.media_service import (
     handle_training_video,
 )
 from app.services.rag_service import handle_rag_query
+from app.services.s3_service import sync_chroma_from_s3
 from app.services.whatsapp_service import configure, mark_read, send_text
 from config import Config
 from database import get_employee_by_whatsapp, initialize_database
@@ -92,258 +94,270 @@ configure(WHATSAPP_TOKEN, PHONE_NUMBER_ID)
 # Global variables initialized safely
 collection = None
 gemini_client = None
-_bg_thread_started = False
 
 
 def init_gemini():
-    """Initialize Gemini client."""
-    global gemini_client
-    if GEMINI_API_KEY:
-        try:
-            gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-            logger.info("[STARTUP] ✅ Gemini client initialized")
-        except Exception as e:
-            logger.error(f"[STARTUP] ❌ Gemini initialization failed: {e}")
+  """Initialize Gemini client."""
+  global gemini_client
+  if GEMINI_API_KEY:
+    try:
+      gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+      logger.info("[STARTUP] ✅ Gemini client initialized")
+    except Exception as e:
+      logger.error(f"[STARTUP] ❌ Gemini initialization failed: {e}")
 
 
 def init_chroma():
-    """Initialize ChromaDB collection reference inside background thread."""
-    global collection
-    try:
-        import chromadb
-        from app.services.lazy_embedding import LazyEmbeddingFunction
+  """Initialize ChromaDB collection reference."""
+  global collection
+  try:
+    import chromadb
 
-        client = chromadb.PersistentClient(path="chroma_db")
-        embedding_fn = LazyEmbeddingFunction(model_name="gemini-embedding-001")
+    from app.services.lazy_embedding import LazyEmbeddingFunction
 
-        collection = client.get_or_create_collection(
-            name="hr_policies", embedding_function=embedding_fn
-        )
-        logger.info("[STARTUP] ✅ ChromaDB initialized successfully!")
-    except Exception as e:
-        logger.error(f"[STARTUP] ❌ ChromaDB initialization failed: {e}")
+    client = chromadb.PersistentClient(path="chroma_db")
+    embedding_fn = LazyEmbeddingFunction(model_name="gemini-embedding-001")
+
+    collection = client.get_or_create_collection(
+        name="hr_policies", embedding_function=embedding_fn
+    )
+    logger.info("[STARTUP] ✅ ChromaDB initialized successfully!")
+  except Exception as e:
+    logger.error(f"[STARTUP] ❌ ChromaDB initialization failed: {e}")
 
 
 def startup_background_tasks():
-    """Runs once in a background thread AFTER Gunicorn opens port 10000."""
-    logger.info("=" * 50)
-    logger.info("STARTING BACKGROUND APP INITIALIZATION")
-    logger.info("=" * 50)
+  """Runs once on application startup."""
+  logger.info("=" * 50)
+  logger.info("STARTING APP INITIALIZATION")
+  logger.info("=" * 50)
 
-    try:
-        initialize_database()
-        logger.info("[STARTUP] ✅ Database initialized")
-    except Exception as e:
-        logger.error(f"[STARTUP] ❌ Database init error: {e}")
+  try:
+    initialize_database()
+    logger.info("[STARTUP] ✅ Database initialized")
+  except Exception as e:
+    logger.error(f"[STARTUP] ❌ Database init error: {e}")
 
-    init_gemini()
-    init_chroma()
+  # Download pre-built vector DB created in Colab from S3
+  sync_chroma_from_s3()
 
-    try:
-        from scripts.update_db import build_index
+  # Initialize Gemini client & ChromaDB connection
+  init_gemini()
+  init_chroma()
 
-        build_index()
-        logger.info("[STARTUP] ✅ Knowledge base build complete")
-    except Exception as e:
-        logger.error(f"[STARTUP] ❌ Background startup sync error: {e}")
-
-    logger.info("=" * 50)
-    logger.info("APPLICATION_STARTUP_COMPLETE ✅")
-    logger.info("=" * 50)
+  logger.info("=" * 50)
+  logger.info("APPLICATION_STARTUP_COMPLETE ✅")
+  logger.info("=" * 50)
 
 
-# Start background thread exactly ONCE
-if not _bg_thread_started:
-    _bg_thread_started = True
-    threading.Thread(target=startup_background_tasks, daemon=True).start()
+# FIX 1: Run initialization on module load so Gunicorn executes it when starting
+startup_background_tasks()
 
 
 def router(employee, message):
-    intent = classify_intent(message)
-    sender = employee["whatsapp"]
+  """Route incoming message based on intent."""
+  global collection, gemini_client
 
-    logger.info(f"Intent classified: {intent}")
+  # Lazy-load fallback if startup failed
+  if collection is None:
+    init_chroma()
+  if gemini_client is None:
+    init_gemini()
 
-    try:
-        if sender in leave_sessions:
-            msg = message.lower().strip()
+  intent = classify_intent(message)
+  sender = employee["whatsapp"]
 
-            if msg in [
-                "cancel",
-                "stop",
-                "exit",
-                "quit",
-                "never mind",
-                "forget it",
-            ]:
-                del leave_sessions[sender]
-                send_text(sender, "❌ Leave request cancelled.")
-                return
+  logger.info(f"Intent classified: {intent}")
 
-            if msg in ["restart", "reset", "start over"]:
-                leave_sessions[sender] = {
-                    "from_date": None,
-                    "to_date": None,
-                    "reason": None,
-                    "waiting_for": "from_date",
-                }
+  try:
+    if sender in leave_sessions:
+      msg = message.lower().strip()
 
-                send_text(
-                    sender,
-                    "🔄 Let's start again.\n\n📅 From which date would you like to start your leave?",
-                )
-                return
+      if msg in [
+          "cancel",
+          "stop",
+          "exit",
+          "quit",
+          "never mind",
+          "forget it",
+      ]:
+        del leave_sessions[sender]
+        send_text(sender, "❌ Leave request cancelled.")
+        return
 
-            continue_leave_conversation(employee, message, gemini_client)
-            return
+      if msg in ["restart", "reset", "start over"]:
+        leave_sessions[sender] = {
+            "from_date": None,
+            "to_date": None,
+            "reason": None,
+            "waiting_for": "from_date",
+        }
 
-        if intent == "rag":
-            handle_rag_query(
-                employee,
-                message,
-                collection,
-                gemini_client,
-            )
-
-        elif intent == "leave_balance":
-            handle_leave_balance(employee)
-
-        elif intent == "apply_leave":
-            start_leave_conversation(employee, message, gemini_client)
-
-        elif intent == "salary_slip":
-            handle_salary_slip(employee, message)
-
-        elif intent == "training_video":
-            handle_training_video(employee, message)
-
-        elif intent == "leave_history":
-            handle_leave_history(employee)
-
-        else:
-            send_text(sender, "I didn't understand your request.")
-
-    except Exception:
-        logger.exception(
-            f'ROUTER_ERROR | user={employee.get("employee_id")}'
-        )
         send_text(
-            sender, "❌ Something went wrong while processing your request."
+            sender,
+            (
+                "🔄 Let's start again.\n\n📅 From which date would you like to"
+                " start your leave?"
+            ),
         )
+        return
+
+      continue_leave_conversation(employee, message, gemini_client)
+      return
+
+    if intent == "rag":
+      handle_rag_query(
+          employee,
+          message,
+          collection,
+          gemini_client,
+      )
+
+    elif intent == "leave_balance":
+      handle_leave_balance(employee)
+
+    elif intent == "apply_leave":
+      start_leave_conversation(employee, message, gemini_client)
+
+    elif intent == "salary_slip":
+      handle_salary_slip(employee, message)
+
+    elif intent == "training_video":
+      handle_training_video(employee, message)
+
+    elif intent == "leave_history":
+      handle_leave_history(employee)
+
+    else:
+      send_text(sender, "I didn't understand your request.")
+
+  except Exception:
+    logger.exception(
+        f'ROUTER_ERROR | user={employee.get("employee_id")}'
+    )
+    send_text(
+        sender, "❌ Something went wrong while processing your request."
+    )
 
 
 @app.route("/webhook", methods=["GET"])
 def verify():
-    if request.args.get("hub.mode") == "subscribe" and request.args.get(
-        "hub.verify_token"
-    ) == VERIFY_TOKEN:
-        logger.info("WEBHOOK_VERIFIED")
-        return request.args.get("hub.challenge"), 200
+  if (
+      request.args.get("hub.mode") == "subscribe"
+      and request.args.get("hub.verify_token") == VERIFY_TOKEN
+  ):
+    logger.info("WEBHOOK_VERIFIED")
+    return request.args.get("hub.challenge"), 200
 
-    logger.warning("WEBHOOK_VERIFICATION_FAILED")
-    return "Forbidden", 403
+  logger.warning("WEBHOOK_VERIFICATION_FAILED")
+  return "Forbidden", 403
 
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    try:
-        body = request.get_json(silent=True) or {}
+  try:
+    body = request.get_json(silent=True) or {}
 
-        entry = body.get("entry", [{}])[0]
-        changes = entry.get("changes", [{}])[0]
-        value = changes.get("value", {})
+    entry = body.get("entry", [{}])[0]
+    changes = entry.get("changes", [{}])[0]
+    value = changes.get("value", {})
 
-        if value.get("statuses"):
-            logger.info("WHATSAPP_STATUS_EVENT_IGNORED")
-            return "OK", 200
+    if value.get("statuses"):
+      logger.info("WHATSAPP_STATUS_EVENT_IGNORED")
+      return "OK", 200
 
-        if "messages" not in value:
-            logger.info("NON_MESSAGE_EVENT_IGNORED")
-            return "OK", 200
+    if "messages" not in value:
+      logger.info("NON_MESSAGE_EVENT_IGNORED")
+      return "OK", 200
 
-        message = value["messages"][0]
+    message = value["messages"][0]
 
-        if message.get("type") != "text":
-            logger.info(
-                f'NON_TEXT_MESSAGE_IGNORED | type={message.get("type")}'
-            )
-            return "OK", 200
+    if message.get("type") != "text":
+      logger.info(
+          f'NON_TEXT_MESSAGE_IGNORED | type={message.get("type")}'
+      )
+      return "OK", 200
 
-        text = message.get("text", {}).get("body", "").strip()
-        if not text:
-            return "OK", 200
+    text = message.get("text", {}).get("body", "").strip()
+    if not text:
+      return "OK", 200
 
-        original_sender = message["from"]
-        logger.info(f"RAW_WHATSAPP_NUMBER = {original_sender}")
-        sender = original_sender
+    original_sender = message["from"]
+    logger.info(f"RAW_WHATSAPP_NUMBER = {original_sender}")
+    sender = original_sender
 
-        normalized_sender = (
-            sender[2:]
-            if sender.startswith("91") and len(sender) == 12
-            else sender
-        )
+    normalized_sender = (
+        sender[2:] if sender.startswith("91") and len(sender) == 12 else sender
+    )
 
-        if not check_rate_limit(normalized_sender):
-            logger.warning(f"RATE_LIMIT_EXCEEDED | sender={original_sender}")
-            send_text(
-                original_sender,
-                "⚠️ You are sending messages too fast. Please wait a moment and try again.",
-            )
-            return "OK", 200
+    if not check_rate_limit(normalized_sender):
+      logger.warning(f"RATE_LIMIT_EXCEEDED | sender={original_sender}")
+      send_text(
+          original_sender,
+          (
+              "⚠️ You are sending messages too fast. Please wait a moment and"
+              " try again."
+          ),
+      )
+      return "OK", 200
 
-        logger.info(
-            f"WHATSAPP_MESSAGE | sender={original_sender} | normalized={normalized_sender} | text={text[:50]}"
-        )
+    logger.info(
+        f"WHATSAPP_MESSAGE | sender={original_sender} |"
+        f" normalized={normalized_sender} | text={text[:50]}"
+    )
 
-        mark_read(message["id"])
+    mark_read(message["id"])
 
-        employee = get_employee_by_whatsapp(sender)
+    employee = get_employee_by_whatsapp(sender)
 
-        if employee is None:
-            logger.warning(f"UNREGISTERED_USER | sender={original_sender}")
-            send_text(
-                original_sender, "You are not registered in the HR system."
-            )
-            return "OK", 200
+    if employee is None:
+      logger.warning(f"UNREGISTERED_USER | sender={original_sender}")
+      send_text(
+          original_sender, "You are not registered in the HR system."
+      )
+      return "OK", 200
 
-        logger.info(
-            f'AUTH_SUCCESS | employee={employee.get("employee_id")} | name={employee.get("name")}'
-        )
+    logger.info(
+        f"AUTH_SUCCESS | employee={employee.get('employee_id')} |"
+        f" name={employee.get('name')}"
+    )
 
-        router(employee, text)
+    # FIX 2: Process query in a background thread so WhatsApp gets HTTP 200 immediately
+    threading.Thread(target=router, args=(employee, text), daemon=True).start()
 
-    except Exception:
-        logger.exception("WEBHOOK_ERROR")
+  except Exception:
+    logger.exception("WEBHOOK_ERROR")
 
-    return "OK", 200
+  # Respond HTTP 200 immediately to prevent Meta from retrying 4 times
+  return "OK", 200
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    """Health check endpoint for deployment platforms like Render."""
-    try:
-        doc_count = collection.count() if collection else 0
-    except Exception:
-        doc_count = "error_fetching_count"
+  """Health check endpoint for deployment platforms like Render."""
+  try:
+    doc_count = collection.count() if collection else 0
+  except Exception:
+    doc_count = "error_fetching_count"
 
-    return {
-        "status": "healthy",
-        "database": "connected",
-        "chroma": "ready" if collection else "not_ready",
-        "collection_count": doc_count,
-        "gemini_client": (
-            "initialized" if gemini_client else "not_initialized"
-        ),
-        "service": "whatsapp-hr-assistant",
-    }, 200
+  return {
+      "status": "healthy",
+      "database": "connected",
+      "chroma": "ready" if collection else "not_ready",
+      "collection_count": doc_count,
+      "gemini_client": (
+          "initialized" if gemini_client else "not_initialized"
+      ),
+      "service": "whatsapp-hr-assistant",
+  }, 200
 
 
 @app.route("/videos/<path:filename>")
 def serve_video(filename):
-    """Serve uploaded videos for WhatsApp media delivery."""
-    return send_from_directory(VIDEO_FOLDER, filename, as_attachment=False)
+  """Serve uploaded videos for WhatsApp media delivery."""
+  return send_from_directory(VIDEO_FOLDER, filename, as_attachment=False)
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+  port = int(os.environ.get("PORT", 5000))
+  app.run(host="0.0.0.0", port=port, debug=False)

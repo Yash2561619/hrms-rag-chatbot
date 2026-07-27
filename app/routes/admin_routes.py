@@ -722,44 +722,46 @@ def upload_salary():
 # POLICY MANAGEMENT
 # =====================================================
 
-@admin_bp.route('/policy-management', methods=['GET', 'POST'])
+@admin_bp.route("/policy-management", methods=["GET", "POST"])
 @login_required
 def policy_management():
-    """Manage HR policies with S3 storage and ChromaDB indexing."""
+    """Manage HR policies with S3 storage and background ChromaDB indexing."""
     POLICY_FOLDER = current_app.config.get(
-        'POLICY_FOLDER', 'uploads/policies'
+        "POLICY_FOLDER", "uploads/policies"
     )
     os.makedirs(POLICY_FOLDER, exist_ok=True)
 
-    if request.method == 'POST':
-        if 'policy' not in request.files:
-            flash('❌ No file selected')
-            return redirect(url_for('admin.policy_management'))
+    if request.method == "POST":
+        if "policy" not in request.files:
+            flash("❌ No file selected")
+            return redirect(url_for("admin.policy_management"))
 
-        file = request.files['policy']
+        file = request.files["policy"]
 
-        if not file or file.filename == '':
-            flash('❌ No file selected')
-            return redirect(url_for('admin.policy_management'))
+        if not file or file.filename == "":
+            flash("❌ No file selected")
+            return redirect(url_for("admin.policy_management"))
 
-        if not file.filename.endswith('.pdf'):
-            flash('❌ Only PDF files allowed')
-            return redirect(url_for('admin.policy_management'))
+        if not file.filename.lower().endswith(".pdf"):
+            flash("❌ Only PDF files allowed")
+            return redirect(url_for("admin.policy_management"))
 
+        temp_filepath = None
         try:
             filename = secure_filename(file.filename)
             temp_filepath = os.path.join(POLICY_FOLDER, filename)
 
-            # Save file locally temporarily to calculate MD5 hash
+            # 1. Save locally temporarily to compute MD5 hash
             file.save(temp_filepath)
 
             file_hash = get_pdf_hash(temp_filepath)
             version = get_pdf_version(filename)
 
-            # Re-open file stream to upload to S3
-            with open(temp_filepath, 'rb') as upload_file:
+            # 2. Upload file stream to S3
+            with open(temp_filepath, "rb") as upload_file:
                 s3_key = upload_policy_to_s3(upload_file, filename)
 
+            # 3. Save metadata to SQLite DB
             save_policy_file(
                 file_name=filename,
                 s3_key=s3_key,
@@ -769,20 +771,30 @@ def policy_management():
 
             logger.info(f"POLICY_UPLOADED_TO_S3 | key={s3_key}")
 
+            # 4. Trigger background indexing (Non-blocking)
             threading.Thread(target=build_index, daemon=True).start()
 
-            log_activity(f'📚 Policy uploaded: {filename}')
+            log_activity(f"📚 Policy uploaded: {filename}")
 
-            flash('✅ Policy uploaded! Knowledge base is indexing in the background.')
-
-            return redirect(url_for('admin.policy_management'))
+            flash(
+                "✅ Policy uploaded! Knowledge base is updating in the background."
+            )
+            return redirect(url_for("admin.policy_management"))
 
         except Exception:
-            logger.exception('UPLOAD_POLICY_ERROR')
-            flash('❌ Failed to upload policy')
+            logger.exception("UPLOAD_POLICY_ERROR")
+            flash("❌ Failed to upload policy")
+
+        finally:
+            # Clean up local temporary file immediately so build_index thread has clean access
+            if temp_filepath and os.path.exists(temp_filepath):
+                try:
+                    os.remove(temp_filepath)
+                except OSError:
+                    pass
 
     policies = get_all_policy_files()
-    return render_template('policy_management.html', policies=policies)
+    return render_template("policy_management.html", policies=policies)
 
 
 @admin_bp.route("/delete-policy/<path:filename>", methods=["GET", "POST"])

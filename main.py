@@ -6,7 +6,7 @@ Webhook server with Gemini API embeddings to fit in 512 MB RAM and avoid ONNX cr
 
 import os
 import sys
-
+import threading
 # MUST BE AT THE VERY TOP: Force ChromaDB & ONNX to skip native SIMD optimizations
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
@@ -71,6 +71,21 @@ logger = logging.getLogger(__name__)
 
 # Initialize Flask App
 app = Flask(__name__)
+
+
+def startup_background_tasks():
+    """Runs database sync safely in a background thread after web worker boots."""
+    try:
+        from scripts.update_db import build_index
+
+        build_index()
+    except Exception as e:
+        print(f"Background startup sync error: {e}")
+
+
+# Trigger background sync ONLY once, without blocking Gunicorn boot
+threading.Thread(target=startup_background_tasks, daemon=True).start()
+
 app.config.from_object(Config)
 
 app.secret_key = app.config.get('SECRET_KEY', 'apexhr-super-secret-key-2026')

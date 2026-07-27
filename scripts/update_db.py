@@ -97,21 +97,17 @@ def save_pdf_registry(registry: Dict[str, Any]) -> None:
 def build_index():
     """Build Chroma index with versioning and incremental updating support.
 
-    Uses Gemini API embeddings via LazyEmbeddingFunction for zero local RAM
-    overhead and no ONNX dependencies.
+    Optimized for low RAM consumption and non-blocking SQLite access on Render.
     """
-    global collection
-
     print("\n" + "=" * 80)
     print("Building HR Policy Knowledge Base with Gemini API Embeddings")
     print("=" * 80)
 
-    # Use Gemini API embedding function
+    # Initialize Gemini API embedding function
     ef = LazyEmbeddingFunction(model_name="gemini-embedding-001")
 
+    # Connect to persistent storage
     client = chromadb.PersistentClient(path="chroma_db")
-
-    # Get or create collection directly
     collection = client.get_or_create_collection(
         "hr_policies", embedding_function=ef
     )
@@ -120,7 +116,7 @@ def build_index():
     splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=40)
 
     # =========================================================================
-    # STEP 1: Get current active PDFs in database & load local registry
+    # STEP 1: Get current active PDFs from SQL Database & Local Registry
     # =========================================================================
     registry = load_pdf_registry()
 
@@ -129,7 +125,6 @@ def build_index():
 
     rows = get_all_policy_files()
 
-    # Safely handle both Dictionary rows (dict) and Tuple rows (tuple)
     for row in rows:
         if isinstance(row, dict):
             file_name = row.get("file_name")
@@ -152,22 +147,27 @@ def build_index():
         print(f"  • {pdf}")
 
     # =========================================================================
-    # STEP 2: Get previous PDFs from Chroma metadata
+    # STEP 2: Fetch metadata sources LIGHTLY (Prevents OOM Crashes)
     # =========================================================================
-    all_chunks = collection.get()
     previous_pdfs = set()
-
-    if all_chunks and all_chunks.get("metadatas"):
-        for metadata in all_chunks["metadatas"]:
-            if metadata and "source" in metadata:
-                previous_pdfs.add(metadata["source"])
+    try:
+        # Fetch ONLY metadatas (do NOT fetch entire document strings/vectors into RAM)
+        all_chunks = collection.get(include=["metadatas"])
+        if all_chunks and all_chunks.get("metadatas"):
+            for metadata in all_chunks["metadatas"]:
+                if metadata and "source" in metadata:
+                    previous_pdfs.add(metadata["source"])
+        del all_chunks
+        gc.collect()
+    except Exception as e:
+        logger.warning(f"METADATA_FETCH_FAILED | error={e}")
 
     print(f"\n[INFO] Previous PDFs found in ChromaDB: {len(previous_pdfs)}")
     for pdf in previous_pdfs:
         print(f"  • {pdf}")
 
     # =========================================================================
-    # STEP 3: Remove chunks and registry entries for deleted PDFs
+    # STEP 3: Remove chunks & registry entries for deleted PDFs
     # =========================================================================
     deleted_pdfs = previous_pdfs - set(current_pdfs.keys())
 
@@ -176,14 +176,16 @@ def build_index():
             f"\n[WARNING] Removing chunks for deleted PDFs: {len(deleted_pdfs)}"
         )
         for deleted_pdf in deleted_pdfs:
-            print(f"  ❌ Removing vector chunks for: {deleted_pdf}")
-            
-            # Delete via source metadata filter directly from ChromaDB
+            print(f"  ❌ Purging vector chunks for: {deleted_pdf}")
             try:
                 collection.delete(where={"source": deleted_pdf})
-                print(f"    ✔ Successfully purged {deleted_pdf} from ChromaDB")
+                print(
+                    f"    ✔ Successfully purged {deleted_pdf} from ChromaDB"
+                )
             except Exception as e:
-                logger.warning(f"CHROMADB_DELETE_FAILED | file={deleted_pdf} | {e}")
+                logger.warning(
+                    f"CHROMADB_DELETE_FAILED | file={deleted_pdf} | {e}"
+                )
 
             if deleted_pdf in registry:
                 del registry[deleted_pdf]
@@ -194,21 +196,17 @@ def build_index():
         return
 
     # =========================================================================
-    # STEP 4: Process ONLY new or changed PDFs (Incremental Indexing)
+    # STEP 4: Incremental Indexing (Process ONLY New or Changed PDFs)
     # =========================================================================
     total_chunks = 0
-    updated_files = 0
-    new_files = 0
-
     pdfs_to_process = []
 
     for filename, current_hash in current_pdfs.items():
-        # Check if file missing from registry or hash changed
         if filename not in registry:
-            # Additional check: Does Chroma already contain valid chunks?
-            existing_chunks = collection.get(where={"source": filename})
+            existing_chunks = collection.get(
+                where={"source": filename}, include=["metadatas"]
+            )
             if existing_chunks and existing_chunks.get("ids"):
-                # Register existing chunks without re-embedding
                 registry[filename] = {
                     "hash": current_hash,
                     "chunks": len(existing_chunks["ids"]),
@@ -216,58 +214,64 @@ def build_index():
                 }
                 logger.info(f"REGISTERED_EXISTING | file={filename}")
                 continue
-            
+
             pdfs_to_process.append(filename)
-            new_files += 1
         elif registry[filename].get("hash") != current_hash:
             pdfs_to_process.append(filename)
-            updated_files += 1
 
     if not pdfs_to_process:
-        print("\n[INFO] ✅ No new or changed PDFs detected. Vector store is up to date.")
+        print(
+            "\n[INFO] ✅ No new or changed PDFs detected. Vector store is up to date."
+        )
     else:
         print(f"\n[INFO] PDFs queued to process: {len(pdfs_to_process)}")
         for pdf in pdfs_to_process:
             print(f"  • {pdf}")
 
-    # Process required PDFs with error guarding
+    # =========================================================================
+    # STEP 5: Download, Chunk & Upsert with Strict Garbage Collection
+    # =========================================================================
     for filename in pdfs_to_process:
         s3_key = policy_records[filename]["s3_key"]
-        print(f"\n[INFO] Downloading and processing: {filename} (key: {s3_key})")
+        print(
+            f"\n[INFO] Downloading and processing: {filename} (key: {s3_key})"
+        )
 
         filepath = None
         try:
-            # 1. Download temp file safely
             filepath = download_policy_temp(s3_key)
 
             if not filepath or not os.path.exists(filepath):
-                print(f"  ❌ [ERROR] Could not download {filename} from S3. Skipping.")
+                print(
+                    f"  ❌ [ERROR] Could not download {filename} from S3. Skipping."
+                )
                 continue
 
-            # 2. Extract text with Gemini API OCR fallback
             text, used_ocr = extract_text_from_pdf(
                 filepath, gemini_client=gemini_client
             )
 
             if not text or len(text.strip()) == 0:
-                print(f"  [WARNING] Failed to extract text from {filename}. Skipping.")
+                print(
+                    f"  [WARNING] Failed to extract text from {filename}. Skipping."
+                )
                 continue
 
-            print(f"  ✔ Extracted {len(text)} characters (Used OCR: {used_ocr})")
+            print(
+                f"  ✔ Extracted {len(text)} characters (Used OCR: {used_ocr})"
+            )
 
-            # 3. Split into chunks
             chunks = splitter.split_text(text)
             if not chunks:
                 print("  [WARNING] No chunks produced. Skipping.")
                 continue
 
-            # 4. Remove existing stale chunks if updating
+            # Remove old stale vectors for this specific file before upserting new ones
             try:
                 collection.delete(where={"source": filename})
             except Exception:
                 pass
 
-            # 5. Build IDs and metadata
             ids_list = [f"{filename}_{i}" for i in range(len(chunks))]
             metadatas = [
                 {
@@ -282,31 +286,28 @@ def build_index():
                 for i in range(len(chunks))
             ]
 
-            # 6. Upsert into ChromaDB
             collection.upsert(
                 documents=chunks, ids=ids_list, metadatas=metadatas
             )
-            del text, chunks, metadatas, ids_list
-            gc.collect()
 
             total_chunks += len(chunks)
             print(f"  ✔ Upserted {len(chunks)} chunks for {filename}")
 
-            # 7. Update registry record
             registry[filename] = {
                 "hash": current_pdfs[filename],
                 "chunks": len(chunks),
                 "updated_at": datetime.now().isoformat(),
             }
 
+            del text, chunks, metadatas, ids_list
+            gc.collect()
+
         except Exception as e:
-            # ERROR GUARD: Log error and keep running loop for remaining files
             print(f"  ❌ [ERROR] Failed to process {filename}: {str(e)}")
             logger.exception(f"INDEX_FILE_FAILED | file={filename}")
             continue
 
         finally:
-            # Always clean up temporary files from local disk
             if filepath and os.path.exists(filepath):
                 try:
                     os.remove(filepath)
@@ -315,19 +316,14 @@ def build_index():
             gc.collect()
 
     save_pdf_registry(registry)
+    print("\n[INFO] ✅ Knowledge Base Build Complete!")
+
+
 
     # =========================================================================
     # STEP 5: Summary
     # =========================================================================
-    print("\n" + "=" * 80)
-    print("BUILD SUMMARY")
-    print("=" * 80)
-    print(f"New PDFs Indexed: {new_files}")
-    print(f"Updated PDFs Re-indexed: {updated_files}")
-    print(f"Deleted PDFs Purged: {len(deleted_pdfs)}")
-    print(f"Total Chunks Processed This Run: {total_chunks}")
-    print("=" * 80 + "\n")
-
+    
 
 def display_index_status():
     """Display current state of Chroma index."""

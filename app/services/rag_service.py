@@ -7,18 +7,31 @@ import logging
 import os
 import time
 from typing import Any, Dict
-
+import chromadb
 from app.services.response_service import format_hr_response
 from app.services.whatsapp_service import send_text
 from config import Config
 from database import log_activity
 from google.genai.errors import ClientError
+from app.services.lazy_embedding import LazyEmbeddingFunction
 
 logger = logging.getLogger(__name__)
 
 POLICY_FOLDER = Config.POLICY_FOLDER
 
+def get_chroma_collection() -> Any:
+    """Lazy-load ChromaDB collection if it was not ready at main module boot."""
+    try:
+        client = chromadb.PersistentClient(path="chroma_db")
+        embedding_fn = LazyEmbeddingFunction(model_name="gemini-embedding-001")
+        return client.get_or_create_collection(
+            name="hr_policies", embedding_function=embedding_fn
+        )
+    except Exception as e:
+        logger.error(f"LAZY_CHROMA_INIT_FAILED | error={e}")
+        return None
 
+    
 def handle_rag_query(
     employee: Dict[str, Any],
     message: str,
@@ -41,10 +54,16 @@ def handle_rag_query(
             send_text(sender, "⚠️ Please ask a more specific question.")
             return
 
+        # LAZY LOAD FALLBACK: If global collection is None, attempt to initialize on demand
         if collection is None:
-            logger.error("CHROMA_COLLECTION_NONE")
+            logger.warning("CHROMA_COLLECTION_NONE | Attempting lazy load...")
+            collection = get_chroma_collection()
+
+        if collection is None:
+            logger.error("CHROMA_COLLECTION_STILL_NONE")
             send_text(
-                sender, "❌ Knowledge base is not available right now."
+                sender,
+                "⏳ The HR knowledge base is currently initializing. Please try asking again in a few seconds.",
             )
             return
 

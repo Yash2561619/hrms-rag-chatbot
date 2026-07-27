@@ -14,6 +14,7 @@ from flask import (
     session,
     url_for,
 )
+
 from werkzeug.utils import secure_filename
 
 from app.services.auth_service import authenticate_admin
@@ -726,27 +727,41 @@ import logging
 import os
 import threading
 import time
+import subprocess
+import sys
 
-logger = logging.getLogger(__name__)
 
 
-def run_background_index_safe():
-    """Waits 1 second for the HTTP request to completely release RAM & file handles,
 
-    then cleans garbage and builds the vector index.
+def trigger_detached_build_index():
+    """Spawns update_db.py in a detached OS process completely independent of Gunicorn.
+
+    This prevents Gunicorn from tracking or killing the indexing script with
+    WORKER TIMEOUT.
     """
-    time.sleep(1)  # Allow HTTP response to flush completely
-    gc.collect()  # Clean up memory from file read operations
     try:
-        logger.info("BACKGROUND_INDEX_START | Triggered from admin upload")
-        from scripts.update_db import build_index
+        python_executable = sys.executable
 
-        build_index()
-        logger.info("BACKGROUND_INDEX_COMPLETE")
+        # Get absolute path to scripts/update_db.py relative to project root
+        project_root = os.path.abspath(
+            os.path.join(current_app.root_path, "..")
+        )
+        script_path = os.path.join(project_root, "scripts", "update_db.py")
+
+        if not os.path.exists(script_path):
+            # Fallback if update_db.py is in the root directory
+            script_path = os.path.join(project_root, "update_db.py")
+
+        # Launch detached process
+        subprocess.Popen(
+            [python_executable, script_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,  # Fully detaches process from Gunicorn worker
+        )
+        logger.info("DETACHED_INDEX_PROCESS_STARTED")
     except Exception as e:
-        logger.error(f"BACKGROUND_INDEX_FAILED | error={e}")
-    finally:
-        gc.collect()  # Extra garbage collection pass
+        logger.error(f"FAILED_TO_START_INDEX_PROCESS | error={e}")
 
 
 @admin_bp.route("/policy-management", methods=["GET", "POST"])
@@ -798,10 +813,8 @@ def policy_management():
 
             logger.info(f"POLICY_UPLOADED_TO_S3 | key={s3_key}")
 
-            # 4. START SAFE BACKGROUND THREAD HERE
-            threading.Thread(
-                target=run_background_index_safe, daemon=True
-            ).start()
+            # 4. TRIGGER DETACHED PROCESS (Replaces threading.Thread)
+            trigger_detached_build_index()
 
             log_activity(f"📚 Policy uploaded: {filename}")
 
@@ -810,7 +823,7 @@ def policy_management():
                 "success",
             )
 
-            # 5. RETURN IMMEDIATELY (Prevents Gunicorn 120s timeout)
+            # 5. RETURN IMMEDIATELY
             return redirect(url_for("admin.policy_management"))
 
         except Exception as e:
@@ -827,7 +840,6 @@ def policy_management():
 
     policies = get_all_policy_files()
     return render_template("policy_management.html", policies=policies)
-
 
 @admin_bp.route("/delete-policy/<path:filename>", methods=["GET", "POST"])
 def delete_policy(filename):

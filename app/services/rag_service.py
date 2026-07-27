@@ -92,14 +92,15 @@ def handle_rag_query(
       )
 
       if chunk_count == 0:
-        logger.warning(f"RAG_EMPTY_COLLECTION | user={employee_id}")
+        logger.warning(
+                f"RAG_EMPTY_COLLECTION | user={employee_id} | chroma_db missing"
+                " or unindexed"
+            )
         send_text(
-            sender,
-            (
-                "📚 The HR policy knowledge base is currently empty. Please"
-                " contact the HR administrator."
-            ),
-        )
+                sender,
+                "📚 The HR knowledge base is currently updating or unindexed."
+                " Please run the S3 sync or Colab indexer.",
+            )
         return
 
     except Exception:

@@ -55,17 +55,18 @@ logger = logging.getLogger(__name__)
 
 admin_bp = Blueprint('admin', __name__)
 
-from scripts.update_db import registry
-from scripts.update_db import collection
+from scripts.update_db import load_pdf_registry, save_pdf_registry
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 s3_client = boto3.client(
-    's3',
-    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-    region_name=os.getenv('AWS_REGION')
+    "s3",
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name=os.getenv("AWS_REGION"),
 )
 
-S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
-s3_client = boto3.client("s3")
+# --- ChromaDB Setup (Direct Collection Reference) ---
+chroma_client = chromadb.PersistentClient(path="chroma_db")
+collection = chroma_client.get_or_create_collection(name="hr_policies")
 
 # =====================================================
 # DASHBOARD
@@ -787,22 +788,28 @@ def policy_management():
 def delete_policy(filename):
     try:
         # 1. Delete from S3
-        s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=f"policies/{filename}")
-        
-        # 2. DELETE VECTORS FROM CHROMADB (This fixes your issue!)
+        s3_client.delete_object(
+            Bucket=S3_BUCKET_NAME, Key=f"policies/{filename}"
+        )
+        logger.info(f"S3_DELETED | file={filename}")
+
+        # 2. Delete vectors from ChromaDB
         collection.delete(where={"source": filename})
         logger.info(f"CHROMADB_DELETED | file={filename}")
-        
-        # 3. Update Registry JSON / SQLite DB
-        registry.remove_pdf(filename)
-        
+
+        # 3. Update Registry JSON
+        registry = load_pdf_registry()
+        if filename in registry:
+            del registry[filename]
+            save_pdf_registry(registry)
+            logger.info(f"REGISTRY_DELETED | file={filename}")
+
         flash(f"Successfully deleted {filename}", "success")
     except Exception as e:
         logger.error(f"DELETE_FAILED | file={filename} | error={e}")
-        
+        flash(f"Failed to delete {filename}: {str(e)}", "danger")
+
     return redirect(url_for("policy_management"))
-
-
 
 @admin_bp.route("/download-policy/<filename>")
 @login_required

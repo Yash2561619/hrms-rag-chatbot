@@ -2,7 +2,7 @@ import logging
 import os
 import boto3
 from functools import wraps
-import threadin
+import threading
 import chromadb
 from flask import (
     Blueprint,

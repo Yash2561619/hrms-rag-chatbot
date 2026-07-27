@@ -23,13 +23,10 @@ POLICY_FOLDER = Config.POLICY_FOLDER
 
 
 def get_chroma_collection() -> Any:
-  """Lazy-load ChromaDB collection and sync from S3 if missing locally."""
+  """Lazy-load ChromaDB collection WITHOUT triggering S3 sync during a query."""
   try:
-    # Ensure local vector store is synced from S3 before attaching client
-    if not os.path.exists("chroma_db") or not os.listdir("chroma_db"):
-      logger.info("LOCAL_CHROMA_MISSING | Triggering sync_chroma_from_s3()...")
-      sync_chroma_from_s3()
-
+    # DO NOT sync from S3 here! It causes the timeout.
+    # Only rely on the version already downloaded at startup.
     client = chromadb.PersistentClient(path="chroma_db")
     embedding_fn = LazyEmbeddingFunction(model_name="gemini-embedding-001")
     return client.get_or_create_collection(
@@ -38,7 +35,6 @@ def get_chroma_collection() -> Any:
   except Exception as e:
     logger.error(f"LAZY_CHROMA_INIT_FAILED | error={e}")
     return None
-
 
 def handle_rag_query(
     employee: Dict[str, Any],
@@ -115,7 +111,7 @@ def handle_rag_query(
     # 3. CHROMA VECTOR SEARCH
     # =====================================================
     results = None
-    n_results = min(10, chunk_count)
+    n_results = min(3, chunk_count)
 
     try:
       logger.info(

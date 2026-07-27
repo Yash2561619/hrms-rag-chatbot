@@ -323,12 +323,13 @@ def webhook():
     )
 
     # FIX 2: Process query in a background thread so WhatsApp gets HTTP 200 immediately
-    threading.Thread(target=router, args=(employee, text), daemon=True).start()
+    
 
   except Exception:
     logger.exception("WEBHOOK_ERROR")
 
   # Respond HTTP 200 immediately to prevent Meta from retrying 4 times
+  threading.Thread(target=router, args=(employee, text), daemon=True).start()
   return "OK", 200
 
 

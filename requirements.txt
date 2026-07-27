@@ -57,8 +57,6 @@ jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 kubernetes==36.0.3
 langchain==0.1.16
-
-langchain-core==0.1.53
 langsmith==0.1.147
 lxml==6.1.1
 lz4==4.4.5

@@ -4,10 +4,9 @@ Production-Ready PDF Text Extraction for HR RAG
 -----------------------------------------------
 
 Features:
-* Fast digital PDF extraction with pdfplumber
-* OCR fallback only for scanned PDFs
+* Fast digital PDF extraction with pdfplumber (0-5 MB RAM)
+* Memory-safe OCR fallback via Gemini 2.5 Flash Files API (~0 MB Render RAM)
 * Cross-platform support (Windows/Linux/Render)
-* Safe error handling without hardcoded system paths
 * Clean text return for chunking
 """
 
@@ -24,11 +23,12 @@ logger = logging.getLogger(__name__)
 OCR_THRESHOLD = 100
 
 
-def extract_text_from_pdf(pdf_path: str) -> Tuple[str, bool]:
-    """Extract text from a PDF with smart OCR fallback.
+def extract_text_from_pdf(pdf_path: str, gemini_client: Any = None) -> Tuple[str, bool]:
+    """Extract text from a PDF with smart Gemini Cloud OCR fallback.
 
     Args:
         pdf_path: Path to PDF file
+        gemini_client: Initialized google.genai Client instance for API OCR
 
     Returns:
         (text, used_ocr)
@@ -75,7 +75,7 @@ def extract_text_from_pdf(pdf_path: str) -> Tuple[str, bool]:
         raise e
 
     # =====================================================
-    # STEP 2: OCR FALLBACK ONLY IF NEEDED
+    # STEP 2: OCR FALLBACK (VIA GEMINI CLOUD API)
     # =====================================================
     if len(text) >= OCR_THRESHOLD:
         logger.info(
@@ -84,73 +84,63 @@ def extract_text_from_pdf(pdf_path: str) -> Tuple[str, bool]:
         return text, False
 
     logger.warning(
-        f"PDF_SCANNED_DETECTED | file={pdf_file.name} | chars={len(text)} | running OCR"
+        f"PDF_SCANNED_DETECTED | file={pdf_file.name} | chars={len(text)} | Offloading OCR to Gemini API"
     )
 
-    ocr_text = extract_text_ocr(pdf_path)
+    ocr_text = extract_text_ocr_gemini(pdf_path, gemini_client)
 
-    # Return whatever OCR extracted, or fallback to any sparse digital text found
+    # Return whatever Gemini OCR extracted, or fallback to any sparse digital text found
     final_text = ocr_text if ocr_text else text
     return final_text, True
 
 
-def extract_text_ocr(pdf_path: str) -> str:
-    """OCR extraction for scanned PDFs with cross-platform Poppler handling."""
-    try:
-        from pdf2image import convert_from_path
-        import pytesseract
-    except ImportError as e:
-        logger.error(
-            "OCR_DEPENDENCIES_MISSING | Missing pdf2image or pytesseract"
-        )
+def extract_text_ocr_gemini(pdf_path: str, gemini_client: Any = None) -> str:
+    """Zero-RAM OCR extraction using Gemini 2.5 Flash Files API.
+
+    Offloads page rendering and text recognition completely to Google's Cloud.
+    """
+    if not gemini_client:
+        logger.error("GEMINI_CLIENT_MISSING | Cannot perform OCR without Gemini client.")
         return ""
 
+    uploaded_file = None
     try:
-        logger.info("OCR_START")
+        logger.info(f"GEMINI_OCR_START | file={Path(pdf_path).name}")
 
-        # Determine Poppler Path dynamically (Windows vs Linux/Render)
-        poppler_dir = None
-        win_poppler = r"C:\Program Files\poppler\Library\bin"
-        if os.name == "nt" and os.path.exists(win_poppler):
-            poppler_dir = win_poppler
+        # 1. Stream file bytes to Google Cloud (uses ~0 MB server RAM)
+        uploaded_file = gemini_client.files.upload(file=pdf_path)
 
-        images = convert_from_path(
-            pdf_path,
-            dpi=200,
-            first_page=1,
-            last_page=5,  # Process first 5 pages for performance
-            poppler_path=poppler_dir,
+        prompt = (
+            "Extract all readable text from this PDF document accurately. "
+            "Preserve section headings, bullet points, and table structures. "
+            "Output ONLY the plain extracted text without conversational filler."
         )
 
-        ocr_text = ""
+        # 2. Multimodal transcription on Google's infrastructure
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[uploaded_file, prompt]
+        )
 
-        for i, image in enumerate(images, 1):
-            try:
-                page_text = pytesseract.image_to_string(image)
-
-                if page_text:
-                    ocr_text += page_text + "\n"
-
-                logger.info(
-                    f"OCR_PAGE_DONE | page={i} | chars={len(page_text)}"
-                )
-
-            except Exception as e:
-                logger.warning(
-                    f"OCR_PAGE_FAILED | page={i} | error={str(e)}"
-                )
-                continue
-
-        ocr_text = ocr_text.strip()
-        logger.info(f"OCR_COMPLETE | total_chars={len(ocr_text)}")
+        ocr_text = response.text.strip() if response.text else ""
+        logger.info(f"GEMINI_OCR_COMPLETE | total_chars={len(ocr_text)}")
 
         return ocr_text
 
     except Exception as e:
         logger.exception(
-            f"OCR_ERROR | Failed to execute OCR (Check Poppler/Tesseract system installation): {str(e)}"
+            f"GEMINI_OCR_ERROR | Failed to execute Gemini API OCR: {str(e)}"
         )
         return ""
+
+    finally:
+        # 3. Always clean up temporary file from Google Cloud storage
+        if uploaded_file and hasattr(uploaded_file, "name"):
+            try:
+                gemini_client.files.delete(name=uploaded_file.name)
+                logger.info("GEMINI_TEMP_FILE_CLEANED")
+            except Exception as clean_err:
+                logger.warning(f"GEMINI_CLEANUP_FAILED | error={clean_err}")
 
 
 def extract_pdf_metadata(pdf_path: str) -> Dict[str, Any]:
@@ -174,9 +164,14 @@ if __name__ == "__main__":
 
     test_file = "uploads/policies/travel.pdf"
 
+    # Optional: Initialize Gemini client for local testing
+    from google import genai
+    api_key = os.getenv("GEMINI_API_KEY")
+    client = genai.Client(api_key=api_key) if api_key else None
+
     if os.path.exists(test_file):
         try:
-            extracted_text, used_ocr = extract_text_from_pdf(test_file)
+            extracted_text, used_ocr = extract_text_from_pdf(test_file, gemini_client=client)
             print("\n" + "=" * 60)
             print("EXTRACTION RESULT")
             print("=" * 60)

@@ -92,7 +92,6 @@ orjson==3.11.9
 overrides==7.7.0
 packaging==23.2
 pandas==2.2.3
-pdf2image==1.17.0
 pdfminer.six==20221105
 pdfplumber==0.10.3
 pillow==12.3.0
@@ -113,7 +112,6 @@ Pygments==2.20.0
 pypdfium2==5.12.1
 PyPika==0.51.1
 pyproject_hooks==1.2.0
-pytesseract==0.3.13
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.0
 pytz==2026.2

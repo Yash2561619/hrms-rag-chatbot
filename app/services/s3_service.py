@@ -1,10 +1,16 @@
+"""S3 Service for HR Assistant.
+
+Handles uploading/downloading documents and syncing the FAISS index from AWS
+S3. Location: app/services/s3_service.py
+"""
+
 import logging
 import os
 import tempfile
 import zipfile
 from uuid import uuid4
-from botocore.exceptions import ClientError
 import boto3
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 
@@ -20,28 +26,18 @@ BUCKET = os.getenv("S3_BUCKET_NAME")
 
 def upload_salary_to_s3(file_obj, filename):
   key = f"salary_slips/{uuid4()}_{filename}"
-
   s3.upload_fileobj(
       file_obj, BUCKET, key, ExtraArgs={"ContentType": "application/pdf"}
   )
-
   return key
 
 
 def upload_video_to_s3(file_obj, filename):
   key = f"training_videos/{uuid4()}_{filename}"
-
   s3.upload_fileobj(
       file_obj, BUCKET, key, ExtraArgs={"ContentType": "video/mp4"}
   )
-
   return key
-
-
-def generate_download_url(key, expires=3600):
-  return s3.generate_presigned_url(
-      "get_object", Params={"Bucket": BUCKET, "Key": key}, ExpiresIn=expires
-  )
 
 
 def upload_policy_to_s3(file_obj, filename: str) -> str:
@@ -75,7 +71,7 @@ generate_download_url = generate_presigned_url
 
 
 def delete_file_from_s3(s3_key: str) -> bool:
-  """Delete policy PDF from S3."""
+  """Delete file from S3."""
   try:
     s3.delete_object(Bucket=BUCKET, Key=s3_key)
     logger.info(f"FILE_DELETED_S3 | key={s3_key}")
@@ -86,7 +82,7 @@ def delete_file_from_s3(s3_key: str) -> bool:
 
 
 def download_policy_temp(s3_key: str) -> str:
-  """Download S3 policy file to local temporary folder for OCR/RAG indexing."""
+  """Download S3 policy file to local temporary folder."""
   filename = os.path.basename(s3_key)
   temp_path = os.path.join(tempfile.gettempdir(), filename)
 
@@ -101,37 +97,38 @@ def download_policy_temp(s3_key: str) -> str:
     raise e
 
 
-def sync_chroma_from_s3() -> bool:
-  """Downloads the pre-built chroma_db.zip created by Google Colab from S3
+def sync_faiss_from_s3() -> bool:
+  """Downloads pre-built faiss_index.zip created in Colab from S3
 
-  and extracts it into the project directory.
+  and extracts the faiss_index directory locally.
   """
-  zip_filename = "chroma_db.zip"
+  zip_filename = "faiss_index.zip"
 
   try:
     logger.info(
-        f"FETCHING_PREBUILT_CHROMA | Downloading {zip_filename} from S3..."
+        f"FETCHING_PREBUILT_FAISS | Downloading {zip_filename} from S3..."
     )
     s3.download_file(BUCKET, zip_filename, zip_filename)
 
     if os.path.exists(zip_filename):
-      logger.info(f"EXTRACTING_CHROMA | Extracting {zip_filename}...")
+      logger.info(f"EXTRACTING_FAISS | Extracting {zip_filename}...")
       with zipfile.ZipFile(zip_filename, "r") as zip_ref:
         zip_ref.extractall(".")
 
       # Clean up local zip file after extraction
       os.remove(zip_filename)
-      logger.info("SYNC_CHROMA_SUCCESS ✅ | ChromaDB vector database updated!")
+      logger.info("SYNC_FAISS_SUCCESS ✅ | FAISS vector index updated!")
       return True
 
   except ClientError as e:
-    if e.response["Error"]["Code"] == "404":
+    if e.response.get("Error", {}).get("Code") == "404":
       logger.warning(
-          "PREBUILT_CHROMA_NOT_FOUND | chroma_db.zip does not exist in S3 yet."
+          "PREBUILT_FAISS_NOT_FOUND | faiss_index.zip does not exist in S3"
+          " yet."
       )
     else:
-      logger.error(f"SYNC_CHROMA_ERROR | error={e}")
+      logger.error(f"SYNC_FAISS_ERROR | error={e}")
   except Exception as e:
-    logger.error(f"SYNC_CHROMA_UNEXPECTED_ERROR | error={e}")
+    logger.error(f"SYNC_FAISS_UNEXPECTED_ERROR | error={e}")
 
   return False

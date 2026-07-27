@@ -1,9 +1,8 @@
+from functools import wraps
 import logging
 import os
-import boto3
-from functools import wraps
 import threading
-import chromadb
+import boto3
 from flask import (
     Blueprint,
     current_app,
@@ -14,13 +13,13 @@ from flask import (
     session,
     url_for,
 )
-
 from werkzeug.utils import secure_filename
 
 from app.services.auth_service import authenticate_admin
 from app.services.s3_service import (
     delete_file_from_s3,
     generate_presigned_url,
+    sync_faiss_from_s3,
     upload_policy_to_s3,
     upload_salary_to_s3,
     upload_video_to_s3,
@@ -50,9 +49,14 @@ from database import (
     update_employee,
     update_leave_status,
 )
-from scripts.update_db import build_index, get_pdf_hash, get_pdf_version
-from validators import ValidationError, validate_phone
+from scripts.update_db import (
+    get_pdf_hash,
+    get_pdf_version,
+    load_pdf_registry,
+    save_pdf_registry,
+)
 
+from validators import ValidationError, validate_phone
 logger = logging.getLogger(__name__)
 
 admin_bp = Blueprint('admin', __name__)
@@ -66,9 +70,6 @@ s3_client = boto3.client(
     region_name=os.getenv("AWS_REGION"),
 )
 
-# --- ChromaDB Setup (Direct Collection Reference) ---
-chroma_client = chromadb.PersistentClient(path="chroma_db")
-collection = chroma_client.get_or_create_collection(name="hr_policies")
 
 # =====================================================
 # DASHBOARD
@@ -724,18 +725,13 @@ def upload_salary():
 # =====================================================
 
 
-
-
-
-from app.services.s3_service import sync_chroma_from_s3, upload_policy_to_s3
-from database import get_all_policy_files, log_activity, save_policy_file
-
+from app.services.s3_service import sync_faiss_from_s3, upload_policy_to_s3
 
 
 @admin_bp.route("/policy-management", methods=["GET", "POST"])
 @login_required
 def policy_management():
-  """Manage HR policies with S3 storage and S3-based ChromaDB vector sync."""
+  """Manage HR policies with S3 storage and S3-based FAISS vector sync."""
   POLICY_FOLDER = current_app.config.get("POLICY_FOLDER", "uploads/policies")
   os.makedirs(POLICY_FOLDER, exist_ok=True)
 
@@ -779,24 +775,25 @@ def policy_management():
 
       logger.info(f"POLICY_UPLOADED_TO_S3 | key={s3_key}")
 
-      # 4. TRY SYNCING RECENT VECTOR DB FROM S3
-      # (If a prebuilt index exists on S3, this pulls it instantly into Render without high RAM usage)
-      synced = sync_chroma_from_s3()
+      # 4. TRY SYNCING RECENT FAISS INDEX FROM S3
+      # FIX 2: Call sync_faiss_from_s3() instead of sync_chroma_from_s3()
+      synced = sync_faiss_from_s3()
 
       log_activity(f"📚 Policy uploaded to S3: {filename}")
 
       if synced:
         flash(
-            "✅ Policy uploaded to S3! Vector database synced from S3.",
+            "✅ Policy uploaded to S3! FAISS vector index synced from S3.",
             "success",
         )
       else:
         flash(
-            "✅ Policy uploaded to S3! Please run your Colab notebook to re-index and publish the new knowledge base.",
+            "✅ Policy uploaded to S3! Please run your Colab notebook to"
+            " re-index and publish the new FAISS index.",
             "info",
         )
 
-      # 5. RETURN IMMEDIATELY (Fast response, zero Gunicorn timeouts)
+      # 5. Fast redirect response (zero Gunicorn timeouts)
       return redirect(url_for("admin.policy_management"))
 
     except Exception as e:
@@ -815,31 +812,33 @@ def policy_management():
   return render_template("policy_management.html", policies=policies)
 
 @admin_bp.route("/delete-policy/<path:filename>", methods=["GET", "POST"])
+@login_required
 def delete_policy(filename):
+  """Delete policy file from S3 and update tracking registry."""
+  try:
+    # 1. Delete PDF from S3 bucket
+    s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=f"policies/{filename}")
+    logger.info(f"S3_DELETED | file={filename}")
+
+    # 2. Remove entry from local PDF registry JSON if available
     try:
-        # 1. Delete from S3
-        s3_client.delete_object(
-            Bucket=S3_BUCKET_NAME, Key=f"policies/{filename}"
-        )
-        logger.info(f"S3_DELETED | file={filename}")
-
-        # 2. Delete vectors from ChromaDB
-        collection.delete(where={"source": filename})
-        logger.info(f"CHROMADB_DELETED | file={filename}")
-
-        # 3. Update Registry JSON
-        registry = load_pdf_registry()
-        if filename in registry:
-            del registry[filename]
-            save_pdf_registry(registry)
-            logger.info(f"REGISTRY_DELETED | file={filename}")
-
-        flash(f"Successfully deleted {filename}", "success")
+      registry = load_pdf_registry()
+      if filename in registry:
+        del registry[filename]
+        save_pdf_registry(registry)
+        logger.info(f"REGISTRY_DELETED | file={filename}")
     except Exception as e:
-        logger.error(f"DELETE_FAILED | file={filename} | error={e}")
-        flash(f"Failed to delete {filename}: {str(e)}", "danger")
+      logger.warning(f"REGISTRY_UPDATE_SKIPPED | file={filename} | error={e}")
 
-    return redirect(url_for("policy_management"))
+    flash(
+        f"Successfully deleted {filename}. Run Colab indexer to update FAISS.",
+        "success",
+    )
+  except Exception as e:
+    logger.error(f"DELETE_FAILED | file={filename} | error={e}")
+    flash(f"Failed to delete {filename}: {str(e)}", "danger")
+
+  return redirect(url_for("admin.policy_management"))
 
 @admin_bp.route("/download-policy/<filename>")
 @login_required

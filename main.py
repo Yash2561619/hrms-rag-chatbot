@@ -1,27 +1,12 @@
-"""WhatsApp HR Assistant - Main Flask Application (OPTIMIZED FOR RENDER)
-
-Webhook server with Gemini API embeddings to fit in 512 MB RAM and avoid ONNX
-crashes.
+"""
+WhatsApp HR Assistant - Main Flask Application (OPTIMIZED WITH FAISS + S3)
+Webhook server using FAISS and Gemini API for ultra-fast, zero-lock RAG on Render.
 """
 
 import logging
 import os
 import sys
 import threading
-from types import ModuleType
-
-# MUST BE AT THE VERY TOP: Force ChromaDB & ONNX to skip native SIMD optimizations
-os.environ["ANONYMIZED_TELEMETRY"] = "False"
-os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
-
-
-class DummyONNX(ModuleType):
-
-  def __getattr__(self, name):
-    return None
-
-
-sys.modules["onnxruntime"] = DummyONNX("onnxruntime")
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
@@ -43,7 +28,7 @@ from app.services.media_service import (
     handle_training_video,
 )
 from app.services.rag_service import handle_rag_query
-from app.services.s3_service import sync_chroma_from_s3
+from app.services.s3_service import sync_faiss_from_s3
 from app.services.whatsapp_service import configure, mark_read, send_text
 from config import Config
 from database import get_employee_by_whatsapp, initialize_database
@@ -91,8 +76,7 @@ VERIFY_TOKEN = app.config.get("VERIFY_TOKEN")
 
 configure(WHATSAPP_TOKEN, PHONE_NUMBER_ID)
 
-# Global variables initialized safely
-collection = None
+# Global Gemini client variable
 gemini_client = None
 
 
@@ -107,29 +91,10 @@ def init_gemini():
       logger.error(f"[STARTUP] ❌ Gemini initialization failed: {e}")
 
 
-def init_chroma():
-  """Initialize ChromaDB collection reference."""
-  global collection
-  try:
-    import chromadb
-
-    from app.services.lazy_embedding import LazyEmbeddingFunction
-
-    client = chromadb.PersistentClient(path="chroma_db")
-    embedding_fn = LazyEmbeddingFunction(model_name="gemini-embedding-001")
-
-    collection = client.get_or_create_collection(
-        name="hr_policies", embedding_function=embedding_fn
-    )
-    logger.info("[STARTUP] ✅ ChromaDB initialized successfully!")
-  except Exception as e:
-    logger.error(f"[STARTUP] ❌ ChromaDB initialization failed: {e}")
-
-
 def startup_background_tasks():
   """Runs once on application startup."""
   logger.info("=" * 50)
-  logger.info("STARTING APP INITIALIZATION")
+  logger.info("STARTING APP INITIALIZATION (FAISS + S3)")
   logger.info("=" * 50)
 
   try:
@@ -138,29 +103,25 @@ def startup_background_tasks():
   except Exception as e:
     logger.error(f"[STARTUP] ❌ Database init error: {e}")
 
-  # Download pre-built vector DB created in Colab from S3
-  sync_chroma_from_s3()
+  # Download pre-built FAISS index created in Colab from S3
+  sync_faiss_from_s3()
 
-  # Initialize Gemini client & ChromaDB connection
+  # Initialize Gemini API client
   init_gemini()
-  init_chroma()
 
   logger.info("=" * 50)
   logger.info("APPLICATION_STARTUP_COMPLETE ✅")
   logger.info("=" * 50)
 
 
-# FIX 1: Run initialization on module load so Gunicorn executes it when starting
+# Run initialization on boot so Gunicorn executes it when starting
 startup_background_tasks()
 
 
 def router(employee, message):
   """Route incoming message based on intent."""
-  global collection, gemini_client
+  global gemini_client
 
-  # Lazy-load fallback if startup failed
-  if collection is None:
-    init_chroma()
   if gemini_client is None:
     init_gemini()
 
@@ -209,7 +170,7 @@ def router(employee, message):
       handle_rag_query(
           employee,
           message,
-          collection,
+          None,  # FAISS handles vector loading internally in rag_service
           gemini_client,
       )
 
@@ -232,9 +193,7 @@ def router(employee, message):
       send_text(sender, "I didn't understand your request.")
 
   except Exception:
-    logger.exception(
-        f'ROUTER_ERROR | user={employee.get("employee_id")}'
-    )
+    logger.exception(f'ROUTER_ERROR | user={employee.get("employee_id")}')
     send_text(
         sender, "❌ Something went wrong while processing your request."
     )
@@ -322,30 +281,28 @@ def webhook():
         f" name={employee.get('name')}"
     )
 
-    # FIX 2: Process query in a background thread so WhatsApp gets HTTP 200 immediately
-    
+    # Process query in background thread and call .start()
+    thread = threading.Thread(
+        target=router, args=(employee, text), daemon=True
+    )
+    thread.start()
 
   except Exception:
     logger.exception("WEBHOOK_ERROR")
 
-  # Respond HTTP 200 immediately to prevent Meta from retrying 4 times
-  threading.Thread(target=router, args=(employee, text), daemon=True)
+  # Return HTTP 200 immediately to Meta
   return "OK", 200
 
 
 @app.route("/health", methods=["GET"])
 def health():
   """Health check endpoint for deployment platforms like Render."""
-  try:
-    doc_count = collection.count() if collection else 0
-  except Exception:
-    doc_count = "error_fetching_count"
+  faiss_exists = os.path.exists("faiss_index")
 
   return {
       "status": "healthy",
       "database": "connected",
-      "chroma": "ready" if collection else "not_ready",
-      "collection_count": doc_count,
+      "faiss_index": "ready" if faiss_exists else "not_ready",
       "gemini_client": (
           "initialized" if gemini_client else "not_initialized"
       ),

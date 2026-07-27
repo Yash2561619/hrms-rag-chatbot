@@ -1,367 +1,152 @@
-"""HR Policy Knowledge Base Builder with Incremental Indexing & Gemini API Embeddings.
+"""
+Database & Vector Index Update Script.
+Extracts PDFs, chunks text, builds FAISS index with Gemini Embeddings,
+and uploads faiss_index.zip to S3.
 
-Location: scripts/update_db.py (or update_db.py)
-
-Uses Google Gemini API embeddings (gemini-embedding-001) to avoid ONNX/PyTorch
-native crashes and keep memory usage below 100 MB on Render deployments.
+Location: scripts/update_db.py
 """
 
-from datetime import datetime
-import gc
 import hashlib
 import json
 import logging
 import os
-import re
-import sys
-from typing import Any, Dict, Optional
-
-# Prevent ChromaDB telemetry
-os.environ["ANONYMIZED_TELEMETRY"] = "False"
-
-# Add project root to Python path
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PROJECT_ROOT not in sys.path:
-  sys.path.insert(0, PROJECT_ROOT)
-
-import chromadb
-from chromadb import Documents, EmbeddingFunction, Embeddings
-from google import genai
+import zipfile
+import boto3
+import pdfplumber
+from langchain_community.vectorstores import FAISS
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-from app.services.lazy_embedding import LazyEmbeddingFunction
-from app.services.s3_service import download_policy_temp, sync_chroma_from_s3
-from config import Config
-from database import get_all_policy_files
-from scripts.step1_extract import extract_text_from_pdf
-
-api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-gemini_client = genai.Client(api_key=api_key) if api_key else None
 
 logger = logging.getLogger(__name__)
 
-POLICY_FOLDER = Config.POLICY_FOLDER
+REGISTRY_FILE = "faiss_index/pdf_registry.json"
+S3_BUCKET = os.getenv("S3_BUCKET_NAME")
 
-# Global collection instance variable
-collection = None
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name=os.getenv("AWS_REGION"),
+)
+
+
+def get_pdf_hash(filepath: str) -> str:
+  """Calculates SHA256 hash of a file to check for content updates."""
+  hasher = hashlib.sha256()
+  with open(filepath, "rb") as f:
+    while chunk := f.read(8192):
+      hasher.update(chunk)
+  return hasher.hexdigest()
 
 
 def get_pdf_version(filename: str) -> str:
-  """Extract version from PDF filename.
-
-  Examples:
-  - leave_policy_v1.pdf → "1.0"
-  - leave_policy_v2.pdf → "2.0"
-  - leave_policy.pdf → "1.0"
-  """
-  match = re.search(r"_v(\d+)", filename, re.IGNORECASE)
-  if match:
-    version_num = match.group(1)
-    return f"{version_num}.0"
-  return "1.0"
+  """Generates a basic version string for tracking."""
+  return "v1.0"
 
 
-def get_pdf_hash(pdf_path: str) -> str:
-  """Generate MD5 hash for a PDF file."""
-  hash_md5 = hashlib.md5()
-  with open(pdf_path, "rb") as f:
-    for chunk in iter(lambda: f.read(4096), b""):
-      hash_md5.update(chunk)
-  return hash_md5.hexdigest()
-
-
-def load_pdf_registry() -> Dict[str, Any]:
-  """Loads stored JSON registry tracking indexed PDFs."""
-  registry_path = os.path.join("chroma_db", "pdf_registry.json")
-  if os.path.exists(registry_path):
+def load_pdf_registry() -> dict:
+  """Loads tracking registry for processed PDF files."""
+  if os.path.exists(REGISTRY_FILE):
     try:
-      with open(registry_path, "r", encoding="utf-8") as f:
+      with open(REGISTRY_FILE, "r") as f:
         return json.load(f)
     except Exception as e:
-      logger.warning(f"REGISTRY_LOAD_FAILED | error={e}")
+      logger.error(f"REGISTRY_LOAD_FAILED | error={e}")
   return {}
 
 
-def save_pdf_registry(registry: Dict[str, Any]) -> None:
-  """Saves updated registry state to JSON."""
-  registry_path = os.path.join("chroma_db", "pdf_registry.json")
-  os.makedirs(os.path.dirname(registry_path), exist_ok=True)
-  with open(registry_path, "w", encoding="utf-8") as f:
-    json.dump(registry, f, indent=2)
-  logger.info(f"REGISTRY_SAVED | path={registry_path}")
+def save_pdf_registry(registry: dict) -> None:
+  """Saves PDF registry metadata to disk."""
+  os.makedirs("faiss_index", exist_ok=True)
+  with open(REGISTRY_FILE, "w") as f:
+    json.dump(registry, f, indent=4)
 
 
-def build_index():
-  """Build Chroma index with versioning and incremental updating support.
+def zip_directory(src_dir: str, output_zip: str) -> None:
+  """Compresses FAISS directory into a zip archive for S3 upload."""
+  with zipfile.ZipFile(output_zip, "w", zipfile.ZIP_DEFLATED) as ziph:
+    for root, _, files in os.walk(src_dir):
+      for file in files:
+        file_path = os.path.join(root, file)
+        arcname = os.path.relpath(file_path, src_dir)
+        ziph.write(file_path, arcname)
 
-  Optimized for low RAM consumption and non-blocking SQLite access on Render.
-  """
-  print("\n" + "=" * 80)
-  print("Building HR Policy Knowledge Base with Gemini API Embeddings")
-  print("=" * 80)
 
-  # STEP 0: Attempt to pull pre-built vector DB from S3 first
-  try:
-    print("[INFO] Checking S3 for pre-built chroma_db.zip from Colab...")
-    sync_chroma_from_s3()
-  except Exception as e:
-    logger.warning(f"S3_SYNC_BEFORE_BUILD_FAILED | error={e}")
+def build_index(policy_folder: str = "uploads/policies"):
+  """Reads PDFs from folder, generates FAISS index, and pushes faiss_index.zip to S3."""
+  print("=" * 50)
+  print("STARTING FAISS INDEX BUILDING PROCESS")
+  print("=" * 50)
 
-  # Initialize Gemini API embedding function
-  ef = LazyEmbeddingFunction(model_name="gemini-embedding-001")
+  if not os.path.exists(policy_folder) or not os.listdir(policy_folder):
+    print(f"⚠️ Policy folder '{policy_folder}' is empty or does not exist.")
+    return
 
-  # Connect to persistent storage
-  client = chromadb.PersistentClient(path="chroma_db")
-  collection = client.get_or_create_collection(
-      "hr_policies", embedding_function=ef
+  api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+  if not api_key:
+    raise ValueError("GEMINI_API_KEY environment variable missing!")
+
+  embeddings = GoogleGenerativeAIEmbeddings(
+      model="models/gemini-embedding-001", google_api_key=api_key
   )
-  print("[INFO] Using or created ChromaDB collection 'hr_policies'")
 
-  splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=40)
+  splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=80)
 
-  # =========================================================================
-  # STEP 1: Get current active PDFs from SQL Database & Local Registry
-  # =========================================================================
-  registry = load_pdf_registry()
+  all_chunks = []
+  metadatas = []
 
-  current_pdfs = {}
-  policy_records = {}
+  for filename in os.listdir(policy_folder):
+    if filename.endswith(".pdf"):
+      filepath = os.path.join(policy_folder, filename)
+      print(f"📄 Processing {filename}...")
 
-  rows = get_all_policy_files()
-
-  for row in rows:
-    if isinstance(row, dict):
-      file_name = row.get("file_name")
-      s3_key = row.get("s3_key")
-      version = row.get("version", "1.0")
-      file_hash = row.get("file_hash", "")
-    else:
-      file_name, s3_key, version, file_hash = row
-
-    if file_name and s3_key:
-      current_pdfs[file_name] = file_hash
-      policy_records[file_name] = {
-          "s3_key": s3_key,
-          "version": version,
-          "hash": file_hash,
-      }
-
-  print(f"\n[INFO] Current active PDFs in database: {len(current_pdfs)}")
-  for pdf in current_pdfs:
-    print(f"  • {pdf}")
-
-  # =========================================================================
-  # STEP 2: Fetch metadata sources LIGHTLY (Prevents OOM Crashes)
-  # =========================================================================
-  previous_pdfs = set()
-  try:
-    all_chunks = collection.get(include=["metadatas"])
-    if all_chunks and all_chunks.get("metadatas"):
-      for metadata in all_chunks["metadatas"]:
-        if metadata and "source" in metadata:
-          previous_pdfs.add(metadata["source"])
-    del all_chunks
-    gc.collect()
-  except Exception as e:
-    logger.warning(f"METADATA_FETCH_FAILED | error={e}")
-
-  print(f"\n[INFO] Previous PDFs found in ChromaDB: {len(previous_pdfs)}")
-  for pdf in previous_pdfs:
-    print(f"  • {pdf}")
-
-  # =========================================================================
-  # STEP 3: Remove chunks & registry entries for deleted PDFs
-  # =========================================================================
-  deleted_pdfs = previous_pdfs - set(current_pdfs.keys())
-
-  if deleted_pdfs:
-    print(f"\n[WARNING] Removing chunks for deleted PDFs: {len(deleted_pdfs)}")
-    for deleted_pdf in deleted_pdfs:
-      print(f"  ❌ Purging vector chunks for: {deleted_pdf}")
+      extracted_text = ""
       try:
-        collection.delete(where={"source": deleted_pdf})
-        print(f"    ✔ Successfully purged {deleted_pdf} from ChromaDB")
+        with pdfplumber.open(filepath) as pdf:
+          for page in pdf.pages:
+            text = page.extract_text()
+            if text:
+              extracted_text += text + "\n"
       except Exception as e:
-        logger.warning(f"CHROMADB_DELETE_FAILED | file={deleted_pdf} | {e}")
+        print(f"❌ Failed to extract PDF {filename}: {e}")
+        continue
 
-      if deleted_pdf in registry:
-        del registry[deleted_pdf]
+      if extracted_text.strip():
+        chunks = splitter.split_text(extracted_text)
+        for chunk in chunks:
+          all_chunks.append(chunk)
+          metadatas.append({"source": filename})
+        print(f"  ✔ Created {len(chunks)} chunks")
 
-  if not current_pdfs:
-    print("[WARNING] No active policy records found in database.")
-    save_pdf_registry(registry)
+  if not all_chunks:
+    print("⚠️ No valid text chunks generated.")
     return
 
-  # =========================================================================
-  # STEP 4: Incremental Indexing Check
-  # =========================================================================
-  total_chunks = 0
-  pdfs_to_process = []
+  # Build FAISS Vector Database
+  print("\n⚙️ Generating FAISS index using Gemini Embeddings...")
+  vector_store = FAISS.from_texts(
+      texts=all_chunks, embedding=embeddings, metadatas=metadatas
+  )
 
-  for filename, current_hash in current_pdfs.items():
-    if filename not in registry:
-      existing_chunks = collection.get(
-          where={"source": filename}, include=["metadatas"]
-      )
-      if existing_chunks and existing_chunks.get("ids"):
-        registry[filename] = {
-            "hash": current_hash,
-            "chunks": len(existing_chunks["ids"]),
-            "updated_at": datetime.now().isoformat(),
-        }
-        logger.info(f"REGISTERED_EXISTING | file={filename}")
-        continue
+  # Save FAISS locally
+  output_dir = "faiss_index"
+  vector_store.save_local(output_dir)
+  print(f"✅ Local FAISS index saved to '{output_dir}/'")
 
-      pdfs_to_process.append(filename)
-    elif registry[filename].get("hash") != current_hash:
-      pdfs_to_process.append(filename)
+  # Zip and Upload to S3
+  zip_name = "faiss_index.zip"
+  print(f"📦 Zipping '{output_dir}' to '{zip_name}'...")
+  zip_directory(output_dir, zip_name)
 
-  if not pdfs_to_process:
-    print(
-        "\n[INFO] ✅ No new or changed PDFs detected. Vector store is up to"
-        " date."
-    )
-  else:
-    print(f"\n[INFO] PDFs queued to process: {len(pdfs_to_process)}")
-    for pdf in pdfs_to_process:
-      print(f"  • {pdf}")
+  if S3_BUCKET:
+    print(f"🚀 Uploading {zip_name} to S3 bucket '{S3_BUCKET}'...")
+    s3.upload_file(zip_name, S3_BUCKET, zip_name)
+    print("✅ FAISS index uploaded to S3 successfully!")
 
-  # =========================================================================
-  # STEP 5: Download, Chunk & Upsert
-  # =========================================================================
-  for filename in pdfs_to_process:
-    s3_key = policy_records[filename]["s3_key"]
-    print(f"\n[INFO] Downloading and processing: {filename} (key: {s3_key})")
-
-    filepath = None
-    try:
-      filepath = download_policy_temp(s3_key)
-
-      if not filepath or not os.path.exists(filepath):
-        print(f"  ❌ [ERROR] Could not download {filename} from S3. Skipping.")
-        continue
-
-      text, used_ocr = extract_text_from_pdf(
-          filepath, gemini_client=gemini_client
-      )
-
-      if not text or len(text.strip()) == 0:
-        print(
-            f"  [WARNING] Failed to extract text from {filename}. Skipping."
-        )
-        continue
-
-      print(f"  ✔ Extracted {len(text)} characters (Used OCR: {used_ocr})")
-
-      chunks = splitter.split_text(text)
-      if not chunks:
-        print("  [WARNING] No chunks produced. Skipping.")
-        continue
-
-      try:
-        collection.delete(where={"source": filename})
-      except Exception:
-        pass
-
-      ids_list = [f"{filename}_{i}" for i in range(len(chunks))]
-      metadatas = [
-          {
-              "source": filename,
-              "version": policy_records[filename]["version"],
-              "upload_date": datetime.now().isoformat(),
-              "status": "active",
-              "chunk_index": i,
-              "total_chunks": len(chunks),
-              "used_ocr": str(used_ocr),
-          }
-          for i in range(len(chunks))
-      ]
-
-      collection.upsert(documents=chunks, ids=ids_list, metadatas=metadatas)
-
-      total_chunks += len(chunks)
-      print(f"  ✔ Upserted {len(chunks)} chunks for {filename}")
-
-      registry[filename] = {
-          "hash": current_pdfs[filename],
-          "chunks": len(chunks),
-          "updated_at": datetime.now().isoformat(),
-      }
-
-      del text, chunks, metadatas, ids_list
-      gc.collect()
-
-    except Exception as e:
-      print(f"  ❌ [ERROR] Failed to process {filename}: {str(e)}")
-      logger.exception(f"INDEX_FILE_FAILED | file={filename}")
-      continue
-
-    finally:
-      if filepath and os.path.exists(filepath):
-        try:
-          os.remove(filepath)
-        except OSError:
-          pass
-      gc.collect()
-
-  save_pdf_registry(registry)
-  print("\n[INFO] ✅ Knowledge Base Build Complete!")
-
-
-def display_index_status():
-  """Display current state of Chroma index without memory spikes."""
-  global collection
-
-  if collection is None:
-    ef = LazyEmbeddingFunction(model_name="gemini-embedding-001")
-    client = chromadb.PersistentClient(path="chroma_db")
-    try:
-      collection = client.get_or_create_collection(
-          "hr_policies", embedding_function=ef
-      )
-    except Exception:
-      print("[ERROR] Collection not initialized or empty")
-      return
-
-  all_chunks = collection.get(include=["metadatas"])
-
-  if not all_chunks or not all_chunks.get("metadatas"):
-    print("[INFO] Collection is empty")
-    return
-
-  sources = {}
-
-  for metadata in all_chunks["metadatas"]:
-    if not metadata:
-      continue
-    source = metadata.get("source", "unknown")
-    if source not in sources:
-      sources[source] = {
-          "count": 0,
-          "version": metadata.get("version", "unknown"),
-          "status": metadata.get("status", "unknown"),
-          "upload_date": metadata.get("upload_date", "unknown"),
-      }
-    sources[source]["count"] += 1
-
-  print("\n" + "=" * 80)
-  print("CURRENT INDEX STATUS")
-  print("=" * 80)
-
-  for source, info in sorted(sources.items()):
-    status_emoji = "✅" if info["status"] == "active" else "⚠️"
-    print(f"{status_emoji} {source}")
-    print(f"   Version: {info['version']}")
-    print(f"   Chunks: {info['count']}")
-    print(f"   Status: {info['status']}")
-    print(f"   Date: {info['upload_date'][:10]}")
-    print()
-
-  total = sum(info["count"] for info in sources.values())
-  print(f"Total Chunks Active in Chroma: {total}")
-  print("=" * 80 + "\n")
+  # Cleanup local zip
+  if os.path.exists(zip_name):
+    os.remove(zip_name)
 
 
 if __name__ == "__main__":
   build_index()
-  display_index_status()

@@ -1,27 +1,10 @@
-"""RAG Service for WhatsApp HR Assistant.
-
-Location: app/services/rag_service.py
-"""
-
 import logging
-import os
-import time
-from typing import Any, Dict
-import chromadb
-from google.genai.errors import ClientError
-
-from app.services.lazy_embedding import LazyEmbeddingFunction
-
-from app.services.s3_service import sync_chroma_from_s3
+import threading
 from app.services.whatsapp_service import send_text
-from config import Config
-from database import log_activity
 
 logger = logging.getLogger(__name__)
 
-POLICY_FOLDER = Config.POLICY_FOLDER
-
-
+# Global thread lock to prevent SQLite database deadlocks
 chroma_lock = threading.Lock()
 
 

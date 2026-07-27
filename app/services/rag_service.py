@@ -122,13 +122,13 @@ def handle_rag_query(
           n_results=n_results,
           include=["documents", "metadatas", "distances"],
       )
-    except Exception:
-      logger.exception("CHROMA_QUERY_FAILED")
-      send_text(
-          sender,
-          "❌ Unable to search HR policies right now.",
-      )
-      return
+    except Exception as e:
+            logger.exception(f"CHROMA_QUERY_FAILED | error={e}")
+            send_text(
+                sender,
+                "❌ Unable to search HR policies right now. Please try again in a moment.",
+            )
+            return
 
     # Handle empty document results
     if (

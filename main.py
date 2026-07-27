@@ -329,7 +329,8 @@ def webhook():
     logger.exception("WEBHOOK_ERROR")
 
   # Respond HTTP 200 immediately to prevent Meta from retrying 4 times
-  threading.Thread(target=router, args=(employee, text), daemon=True).start()
+  t = threading.Thread(target=router, args=(employee, text), daemon=True)
+  t.start()
   return "OK", 200
 
 

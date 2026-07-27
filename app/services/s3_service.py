@@ -98,11 +98,9 @@ def download_policy_temp(s3_key: str) -> str:
 
 
 def sync_faiss_from_s3() -> bool:
-  """Downloads pre-built faiss_index.zip created in Colab from S3
-
-  and extracts the faiss_index directory locally.
-  """
+  """Downloads faiss_index.zip from S3 and extracts it into the 'faiss_index' directory."""
   zip_filename = "faiss_index.zip"
+  target_dir = "faiss_index"
 
   try:
     logger.info(
@@ -111,20 +109,35 @@ def sync_faiss_from_s3() -> bool:
     s3.download_file(BUCKET, zip_filename, zip_filename)
 
     if os.path.exists(zip_filename):
-      logger.info(f"EXTRACTING_FAISS | Extracting {zip_filename}...")
-      with zipfile.ZipFile(zip_filename, "r") as zip_ref:
-        zip_ref.extractall(".")
+      os.makedirs(target_dir, exist_ok=True)
 
-      # Clean up local zip file after extraction
+      # Extract zip contents into target_dir
+      with zipfile.ZipFile(zip_filename, "r") as zip_ref:
+        zip_ref.extractall(target_dir)
+
+      # Handle nested folder structure (e.g. faiss_index/faiss_index/index.faiss)
+      nested_path = os.path.join(target_dir, "faiss_index")
+      if os.path.exists(nested_path) and os.path.exists(
+          os.path.join(nested_path, "index.faiss")
+      ):
+        for item in os.listdir(nested_path):
+          shutil.move(
+              os.path.join(nested_path, item), os.path.join(target_dir, item)
+          )
+        shutil.rmtree(nested_path)
+
+      # Clean up the downloaded zip file
       os.remove(zip_filename)
-      logger.info("SYNC_FAISS_SUCCESS ✅ | FAISS vector index updated!")
+      logger.info(
+          "SYNC_FAISS_SUCCESS ✅ | FAISS vector index loaded successfully!"
+      )
       return True
 
   except ClientError as e:
     if e.response.get("Error", {}).get("Code") == "404":
       logger.warning(
           "PREBUILT_FAISS_NOT_FOUND | faiss_index.zip does not exist in S3"
-          " yet."
+          " bucket."
       )
     else:
       logger.error(f"SYNC_FAISS_ERROR | error={e}")

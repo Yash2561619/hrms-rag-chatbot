@@ -94,24 +94,26 @@ def init_gemini():
 def startup_background_tasks():
   """Runs once on application startup."""
   logger.info("=" * 50)
-  logger.info("STARTING APP INITIALIZATION (FAISS + S3)")
+  logger.info("STARTING APP INITIALIZATION")
   logger.info("=" * 50)
 
   try:
     initialize_database()
-    logger.info("[STARTUP] ✅ Database initialized")
   except Exception as e:
-    logger.error(f"[STARTUP] ❌ Database init error: {e}")
+    logger.error(f"[STARTUP] Database init error: {e}")
 
-  # Download pre-built FAISS index created in Colab from S3
+  # 1. Pull latest FAISS index from S3
   sync_faiss_from_s3()
 
-  # Initialize Gemini API client
+  # 2. Pre-warm FAISS in memory
+  from app.services.rag_service import load_faiss_index
+
+  load_faiss_index()
+
   init_gemini()
 
-  logger.info("=" * 50)
-  logger.info("APPLICATION_STARTUP_COMPLETE ✅")
-  logger.info("=" * 50)
+
+startup_background_tasks()
 
 
 # Run initialization on boot so Gunicorn executes it when starting

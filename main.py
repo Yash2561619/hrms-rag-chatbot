@@ -1,18 +1,18 @@
-"""WhatsApp HR Assistant - Main Flask Application (OPTIMIZED FOR RENDER)
-
+"""
+WhatsApp HR Assistant - Main Flask Application (OPTIMIZED FOR RENDER)
 Webhook server with Gemini API embeddings to fit in 512 MB RAM and avoid ONNX crashes.
 """
 
-from types import ModuleType
 import os
 import sys
+import threading
+from types import ModuleType
 
 # MUST BE AT THE VERY TOP: Force ChromaDB & ONNX to skip native SIMD optimizations
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMADB_DISABLE_TELEMETRY"] = "true"
 
 
-# Create a mock onnxruntime module to prevent ChromaDB from loading native C++ binaries
 class DummyONNX(ModuleType):
 
     def __getattr__(self, name):
@@ -21,22 +21,16 @@ class DummyONNX(ModuleType):
 
 sys.modules["onnxruntime"] = DummyONNX("onnxruntime")
 
-# Add project root to Python path
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 import logging
-import threading
-import traceback
-
-import chromadb
 from flask import Flask, request, send_from_directory
 import google.genai as genai
 
 from app.routes.admin_routes import admin_bp
 from app.services.intent_service import classify_intent
-from app.services.lazy_embedding import LazyEmbeddingFunction
 from app.services.leave_service import (
     continue_leave_conversation,
     handle_leave_balance,
@@ -54,7 +48,6 @@ from database import get_employee_by_whatsapp, initialize_database
 from leave_session import leave_sessions
 from rate_limiter import check_rate_limit
 
-# Setup logging
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -71,7 +64,6 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Initialize Flask App
 app = Flask(__name__)
 app.config.from_object(Config)
 
@@ -100,6 +92,7 @@ configure(WHATSAPP_TOKEN, PHONE_NUMBER_ID)
 # Global variables initialized safely
 collection = None
 gemini_client = None
+_bg_thread_started = False
 
 
 def init_gemini():
@@ -111,14 +104,15 @@ def init_gemini():
             logger.info("[STARTUP] ✅ Gemini client initialized")
         except Exception as e:
             logger.error(f"[STARTUP] ❌ Gemini initialization failed: {e}")
-    else:
-        logger.error("[STARTUP] ❌ GEMINI_API_KEY not set")
 
 
 def init_chroma():
-    """Initialize ChromaDB collection reference safely."""
+    """Initialize ChromaDB collection reference inside background thread."""
     global collection
     try:
+        import chromadb
+        from app.services.lazy_embedding import LazyEmbeddingFunction
+
         client = chromadb.PersistentClient(path="chroma_db")
         embedding_fn = LazyEmbeddingFunction(model_name="gemini-embedding-001")
 
@@ -131,29 +125,20 @@ def init_chroma():
 
 
 def startup_background_tasks():
-    """Single unified background startup task.
-
-    Prevents blocking Render HTTP port binding and avoids database locking
-    collisions.
-    """
+    """Runs once in a background thread AFTER Gunicorn opens port 10000."""
     logger.info("=" * 50)
     logger.info("STARTING BACKGROUND APP INITIALIZATION")
     logger.info("=" * 50)
 
-    # 1. Initialize SQLite database
     try:
         initialize_database()
-        logger.info("[STARTUP] ✅ SQLite Database initialized")
+        logger.info("[STARTUP] ✅ Database initialized")
     except Exception as e:
         logger.error(f"[STARTUP] ❌ Database init error: {e}")
 
-    # 2. Initialize Gemini Client
     init_gemini()
-
-    # 3. Initialize Chroma Collection
     init_chroma()
 
-    # 4. Sync Knowledge Base Vector Index
     try:
         from scripts.update_db import build_index
 
@@ -167,8 +152,10 @@ def startup_background_tasks():
     logger.info("=" * 50)
 
 
-# Trigger background sync ONLY once, non-blocking
-threading.Thread(target=startup_background_tasks, daemon=True).start()
+# Start background thread exactly ONCE
+if not _bg_thread_started:
+    _bg_thread_started = True
+    threading.Thread(target=startup_background_tasks, daemon=True).start()
 
 
 def router(employee, message):

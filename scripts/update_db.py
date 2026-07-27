@@ -1,19 +1,21 @@
-"""
-HR Policy Knowledge Base Builder with Incremental Indexing & Gemini API Embeddings.
+"""HR Policy Knowledge Base Builder with Incremental Indexing & Gemini API
+
+Embeddings.
+
 Location: scripts/update_db.py (or update_db.py)
 
-Uses Google Gemini API embeddings (text-embedding-004) to avoid ONNX/PyTorch native crashes
-and keep memory usage below 100 MB on Render deployments.
+Uses Google Gemini API embeddings (gemini-embedding-001) to avoid ONNX/PyTorch
+native crashes and keep memory usage below 100 MB on Render deployments.
 """
 
+from datetime import datetime
 import hashlib
 import json
 import logging
 import os
 import re
 import sys
-from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 
 # Prevent ChromaDB telemetry
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -24,6 +26,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 import chromadb
+from google import genai
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.services.lazy_embedding import LazyEmbeddingFunction
@@ -32,7 +35,6 @@ from config import Config
 from database import get_all_policy_files
 from scripts.step1_extract import extract_text_from_pdf
 
-from google import genai
 api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 gemini_client = genai.Client(api_key=api_key) if api_key else None
 
@@ -52,7 +54,7 @@ def get_pdf_version(filename: str) -> str:
     - leave_policy_v2.pdf → "2.0"
     - leave_policy.pdf → "1.0"
     """
-    match = re.search(r'_v(\d+)', filename, re.IGNORECASE)
+    match = re.search(r"_v(\d+)", filename, re.IGNORECASE)
     if match:
         version_num = match.group(1)
         return f"{version_num}.0"
@@ -68,15 +70,20 @@ def get_pdf_hash(pdf_path: str) -> str:
     return hash_md5.hexdigest()
 
 
-def load_pdf_registry():
+def load_pdf_registry() -> Dict[str, Any]:
+    """Loads stored JSON registry tracking indexed PDFs."""
     registry_path = os.path.join("chroma_db", "pdf_registry.json")
     if os.path.exists(registry_path):
-        with open(registry_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(registry_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"REGISTRY_LOAD_FAILED | error={e}")
     return {}
 
 
-def save_pdf_registry(registry):
+def save_pdf_registry(registry: Dict[str, Any]) -> None:
+    """Saves updated registry state to JSON."""
     registry_path = os.path.join("chroma_db", "pdf_registry.json")
     os.makedirs(os.path.dirname(registry_path), exist_ok=True)
     with open(registry_path, "w", encoding="utf-8") as f:
@@ -101,7 +108,7 @@ def build_index():
 
     client = chromadb.PersistentClient(path="chroma_db")
 
-    # Get or create collection directly without redundant try-except fallback
+    # Get or create collection directly
     collection = client.get_or_create_collection(
         "hr_policies", embedding_function=ef
     )
@@ -110,7 +117,7 @@ def build_index():
     splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=40)
 
     # =========================================================================
-    # STEP 1: Get current PDFs in database & load local registry
+    # STEP 1: Get current active PDFs in database & load local registry
     # =========================================================================
     registry = load_pdf_registry()
 
@@ -137,7 +144,7 @@ def build_index():
                 "hash": file_hash,
             }
 
-    print(f"\n[INFO] Current PDFs in database: {len(current_pdfs)}")
+    print(f"\n[INFO] Current active PDFs in database: {len(current_pdfs)}")
     for pdf in current_pdfs:
         print(f"  • {pdf}")
 
@@ -152,7 +159,7 @@ def build_index():
             if metadata and "source" in metadata:
                 previous_pdfs.add(metadata["source"])
 
-    print(f"\n[INFO] Previous PDFs in Chroma: {len(previous_pdfs)}")
+    print(f"\n[INFO] Previous PDFs found in ChromaDB: {len(previous_pdfs)}")
     for pdf in previous_pdfs:
         print(f"  • {pdf}")
 
@@ -166,14 +173,14 @@ def build_index():
             f"\n[WARNING] Removing chunks for deleted PDFs: {len(deleted_pdfs)}"
         )
         for deleted_pdf in deleted_pdfs:
-            print(f"  ❌ Removing: {deleted_pdf}")
-            chunks_to_delete = collection.get(where={"source": deleted_pdf})
-
-            if chunks_to_delete and chunks_to_delete.get("ids"):
-                collection.delete(ids=chunks_to_delete["ids"])
-                print(
-                    f"     Deleted {len(chunks_to_delete['ids'])} chunks from Chroma"
-                )
+            print(f"  ❌ Removing vector chunks for: {deleted_pdf}")
+            
+            # Delete via source metadata filter directly from ChromaDB
+            try:
+                collection.delete(where={"source": deleted_pdf})
+                print(f"    ✔ Successfully purged {deleted_pdf} from ChromaDB")
+            except Exception as e:
+                logger.warning(f"CHROMADB_DELETE_FAILED | file={deleted_pdf} | {e}")
 
             if deleted_pdf in registry:
                 del registry[deleted_pdf]
@@ -193,7 +200,20 @@ def build_index():
     pdfs_to_process = []
 
     for filename, current_hash in current_pdfs.items():
+        # Check if file missing from registry or hash changed
         if filename not in registry:
+            # Additional check: Does Chroma already contain valid chunks?
+            existing_chunks = collection.get(where={"source": filename})
+            if existing_chunks and existing_chunks.get("ids"):
+                # Register existing chunks without re-embedding
+                registry[filename] = {
+                    "hash": current_hash,
+                    "chunks": len(existing_chunks["ids"]),
+                    "updated_at": datetime.now().isoformat(),
+                }
+                logger.info(f"REGISTERED_EXISTING | file={filename}")
+                continue
+            
             pdfs_to_process.append(filename)
             new_files += 1
         elif registry[filename].get("hash") != current_hash:
@@ -201,13 +221,12 @@ def build_index():
             updated_files += 1
 
     if not pdfs_to_process:
-        print("\n[INFO] ✅ No new or changed PDFs detected.")
+        print("\n[INFO] ✅ No new or changed PDFs detected. Vector store is up to date.")
     else:
-        print(f"\n[INFO] PDFs to process: {len(pdfs_to_process)}")
+        print(f"\n[INFO] PDFs queued to process: {len(pdfs_to_process)}")
         for pdf in pdfs_to_process:
             print(f"  • {pdf}")
 
-    # Process required PDFs
     # Process required PDFs with error guarding
     for filename in pdfs_to_process:
         s3_key = policy_records[filename]["s3_key"]
@@ -218,9 +237,14 @@ def build_index():
             # 1. Download temp file safely
             filepath = download_policy_temp(s3_key)
 
-            # 2. Extract text with OCR fallback
+            if not filepath or not os.path.exists(filepath):
+                print(f"  ❌ [ERROR] Could not download {filename} from S3. Skipping.")
+                continue
+
+            # 2. Extract text with Gemini API OCR fallback
             text, used_ocr = extract_text_from_pdf(
-                filepath,gemini_client=gemini_client)
+                filepath, gemini_client=gemini_client
+            )
 
             if not text or len(text.strip()) == 0:
                 print(f"  [WARNING] Failed to extract text from {filename}. Skipping.")
@@ -234,11 +258,11 @@ def build_index():
                 print("  [WARNING] No chunks produced. Skipping.")
                 continue
 
-            # 4. Remove existing chunks if updating
-            existing = collection.get(where={"source": filename})
-            existing_ids = existing.get("ids", []) if existing else []
-            if existing_ids:
-                collection.delete(ids=existing_ids)
+            # 4. Remove existing stale chunks if updating
+            try:
+                collection.delete(where={"source": filename})
+            except Exception:
+                pass
 
             # 5. Build IDs and metadata
             ids_list = [f"{filename}_{i}" for i in range(len(chunks))]
@@ -271,13 +295,13 @@ def build_index():
             }
 
         except Exception as e:
-            # THIS IS THE ERROR GUARD: Log error and keep running!
+            # ERROR GUARD: Log error and keep running loop for remaining files
             print(f"  ❌ [ERROR] Failed to process {filename}: {str(e)}")
             logger.exception(f"INDEX_FILE_FAILED | file={filename}")
             continue
 
         finally:
-            # Always clean up temporary files from disk
+            # Always clean up temporary files from local disk
             if filepath and os.path.exists(filepath):
                 try:
                     os.remove(filepath)
@@ -292,9 +316,9 @@ def build_index():
     print("\n" + "=" * 80)
     print("BUILD SUMMARY")
     print("=" * 80)
-    print(f"New PDFs: {new_files}")
-    print(f"Updated PDFs: {updated_files}")
-    print(f"Deleted PDFs: {len(deleted_pdfs)}")
+    print(f"New PDFs Indexed: {new_files}")
+    print(f"Updated PDFs Re-indexed: {updated_files}")
+    print(f"Deleted PDFs Purged: {len(deleted_pdfs)}")
     print(f"Total Chunks Processed This Run: {total_chunks}")
     print("=" * 80 + "\n")
 
@@ -351,7 +375,7 @@ def display_index_status():
         print()
 
     total = sum(info["count"] for info in sources.values())
-    print(f"Total Chunks: {total}")
+    print(f"Total Chunks Active in Chroma: {total}")
     print("=" * 80 + "\n")
 
 

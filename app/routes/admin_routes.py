@@ -1,5 +1,6 @@
 import logging
 import os
+import boto3
 from functools import wraps
 import threading
 from flask import (
@@ -53,6 +54,18 @@ from validators import ValidationError, validate_phone
 logger = logging.getLogger(__name__)
 
 admin_bp = Blueprint('admin', __name__)
+
+from scripts.update_db import registry
+from scripts.update_db import collection
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+    region_name=os.getenv('AWS_REGION')
+)
+
+S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
+s3_client = boto3.client("s3")
 
 # =====================================================
 # DASHBOARD
@@ -770,35 +783,25 @@ def policy_management():
     return render_template('policy_management.html', policies=policies)
 
 
-@admin_bp.route('/delete-policy/<filename>')
-@login_required
+@admin_bp.route("/delete-policy/<path:filename>", methods=["GET", "POST"])
 def delete_policy(filename):
-    """Delete policy file from S3, remove DB record, and rebuild Chroma index."""
     try:
-        s3_key = f"policies/{filename}"
-
         # 1. Delete from S3
-        delete_file_from_s3(s3_key)
-        logger.info(f"POLICY_DELETED_FROM_S3 | key={s3_key}")
+        s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=f"policies/{filename}")
+        
+        # 2. DELETE VECTORS FROM CHROMADB (This fixes your issue!)
+        collection.delete(where={"source": filename})
+        logger.info(f"CHROMADB_DELETED | file={filename}")
+        
+        # 3. Update Registry JSON / SQLite DB
+        registry.remove_pdf(filename)
+        
+        flash(f"Successfully deleted {filename}", "success")
+    except Exception as e:
+        logger.error(f"DELETE_FAILED | file={filename} | error={e}")
+        
+    return redirect(url_for("policy_management"))
 
-        # 2. Delete record from SQLite FIRST so build_index doesn't try to download it
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM policy_files WHERE file_name=?", (filename,))
-        conn.commit()
-        conn.close()
-
-        # 3. Rebuild index with remaining policies
-        build_index()
-
-        log_activity(f'📚 Policy deleted: {filename}')
-        flash(f'✅ {filename} deleted successfully!')
-
-    except Exception:
-        logger.exception('DELETE_POLICY_ERROR')
-        flash('❌ Failed to delete policy')
-
-    return redirect(url_for('admin.policy_management'))
 
 
 @admin_bp.route("/download-policy/<filename>")

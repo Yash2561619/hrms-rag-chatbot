@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config.from_object(Config)
+_initialized = False
 
 app.secret_key = app.config.get("SECRET_KEY", "apexhr-super-secret-key-2026")
 app.config["SESSION_PERMANENT"] = False
@@ -90,9 +91,12 @@ def init_gemini():
     except Exception as e:
       logger.error(f"[STARTUP] ❌ Gemini initialization failed: {e}")
 
-
 def startup_background_tasks():
   """Runs once on application startup."""
+  global _initialized
+  if _initialized:
+    return
+
   logger.info("=" * 50)
   logger.info("STARTING APP INITIALIZATION")
   logger.info("=" * 50)
@@ -103,20 +107,28 @@ def startup_background_tasks():
     logger.error(f"[STARTUP] Database init error: {e}")
 
   # 1. Pull latest FAISS index from S3
-  sync_faiss_from_s3()
+  try:
+    sync_faiss_from_s3()
+  except Exception as e:
+    logger.error(f"[STARTUP] S3 sync error: {e}")
 
-  # 2. Pre-warm FAISS in memory
-  from app.services.rag_service import load_faiss_index
+  # 2. Pre-warm FAISS and BM25 indexes in memory
+  try:
+    from app.services.rag_service import load_indexes
 
-  load_faiss_index()
+    load_indexes()
+  except Exception as e:
+    logger.error(f"[STARTUP] Index pre-warm error: {e}")
 
-  init_gemini()
+  try:
+    init_gemini()
+  except Exception as e:
+    logger.error(f"[STARTUP] Gemini init error: {e}")
+
+  _initialized = True
 
 
-startup_background_tasks()
-
-
-# Run initialization on boot so Gunicorn executes it when starting
+# Run initialization safely on module load
 startup_background_tasks()
 
 

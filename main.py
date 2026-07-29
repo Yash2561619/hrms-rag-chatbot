@@ -225,6 +225,26 @@ def verify():
   logger.warning("WEBHOOK_VERIFICATION_FAILED")
   return "Forbidden", 403
 
+PROCESSED_MESSAGE_IDS = {}
+import time
+def is_duplicate_message(message_id: str) -> bool:
+  """Checks if WhatsApp webhook message ID was already processed in the last 60 seconds."""
+  if not message_id:
+    return False
+
+  now = time.time()
+
+  # Clean up old message IDs (> 60 seconds old) to keep RAM footprint near 0
+  expired_keys = [k for k, v in PROCESSED_MESSAGE_IDS.items() if now - v > 60]
+  for k in expired_keys:
+    del PROCESSED_MESSAGE_IDS[k]
+
+  if message_id in PROCESSED_MESSAGE_IDS:
+    return True
+
+  PROCESSED_MESSAGE_IDS[message_id] = now
+  return False
+
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -244,11 +264,16 @@ def webhook():
       return "OK", 200
 
     message = value["messages"][0]
+    message_id = message.get("id")
 
+    # 1. STEP 1: Deduplication Guard (Check before doing ANY work)
+    if is_duplicate_message(message_id):
+      logger.info(f"DUPLICATE_WEBHOOK_SKIPPED | message_id={message_id}")
+      return "OK", 200
+
+    # 2. STEP 2: Filter non-text messages
     if message.get("type") != "text":
-      logger.info(
-          f'NON_TEXT_MESSAGE_IGNORED | type={message.get("type")}'
-      )
+      logger.info(f'NON_TEXT_MESSAGE_IGNORED | type={message.get("type")}')
       return "OK", 200
 
     text = message.get("text", {}).get("body", "").strip()
@@ -263,6 +288,7 @@ def webhook():
         sender[2:] if sender.startswith("91") and len(sender) == 12 else sender
     )
 
+    # 3. STEP 3: Rate limiting check
     if not check_rate_limit(normalized_sender):
       logger.warning(f"RATE_LIMIT_EXCEEDED | sender={original_sender}")
       send_text(
@@ -285,9 +311,7 @@ def webhook():
 
     if employee is None:
       logger.warning(f"UNREGISTERED_USER | sender={original_sender}")
-      send_text(
-          original_sender, "You are not registered in the HR system."
-      )
+      send_text(original_sender, "You are not registered in the HR system.")
       return "OK", 200
 
     logger.info(
@@ -295,7 +319,7 @@ def webhook():
         f" name={employee.get('name')}"
     )
 
-    # Process query in background thread and call .start()
+    # 4. STEP 4: Process query in background thread
     thread = threading.Thread(
         target=router, args=(employee, text), daemon=True
     )
@@ -306,7 +330,6 @@ def webhook():
 
   # Return HTTP 200 immediately to Meta
   return "OK", 200
-
 
 @app.route("/health", methods=["GET"])
 def health():

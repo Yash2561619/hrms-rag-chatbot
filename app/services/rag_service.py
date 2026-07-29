@@ -1,16 +1,16 @@
 """Advanced RAG Service for HR Policy Queries.
 
-Includes Query Expansion, Hybrid FAISS + BM25 Search, API Re-Ranking, and Model
-Rate Limit Fallbacks. Location: app/services/rag_service.py
+Includes Query Expansion, Hybrid FAISS + BM25 Search, Math RRF Re-Ranking, and
+Model Rate Limit Fallbacks. Location: app/services/rag_service.py
 """
 
-import logging
+logging
 import os
 import re
+from app.services.whatsapp_service import send_text
 from langchain_community.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from rank_bm25 import BM25Okapi
-from app.services.whatsapp_service import send_text
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +52,10 @@ def load_indexes():
 def multi_query_expansion(query: str, gemini_client) -> list[str]:
   """Generates 2 query variations to improve search recall."""
   prompt = f"""
-    Generate 2 alternative search queries for an HR policy search.
-    Original Query: "{query}"
-    Output format: Return ONLY the queries separated by newlines, no bullet points or extra text.
-    """
+Generate 2 alternative search queries for an HR policy search.
+Original Query: "{query}"
+Output format: Return ONLY the queries separated by newlines, no bullet points or extra text.
+"""
   try:
     res = gemini_client.models.generate_content(
         model="gemini-2.5-flash",
@@ -71,13 +71,14 @@ def multi_query_expansion(query: str, gemini_client) -> list[str]:
     return [query]
 
 
-def hybrid_retrieve(queries: list[str], top_k: int = 6) -> list:
-  """Executes FAISS + BM25 Hybrid Search with Reciprocal Rank Fusion (RRF)."""
+def hybrid_retrieve(
+    queries: list[str], top_k: int = 6
+) -> tuple[list, list, list]:
+  """Executes FAISS + BM25 Hybrid Search and returns dense, sparse, and merged results."""
   load_indexes()
   if not faiss_store or not bm25_index:
-    return []
+    return [], [], []
 
-  doc_scores = {}
   dense_docs = []
   sparse_docs = []
 
@@ -95,35 +96,20 @@ def hybrid_retrieve(queries: list[str], top_k: int = 6) -> list:
     s_docs = [all_docs[i] for i in top_indices]
     sparse_docs.extend(s_docs)
 
-  # 3. Reciprocal Rank Fusion (RRF)
-  for rank, doc in enumerate(dense_docs + sparse_docs):
-    doc_scores[doc.page_content] = doc_scores.get(doc.page_content, 0) + (
-        1 / (rank + 60)
-    )
+  all_retrieved = dense_docs + sparse_docs
 
-  sorted_contents = sorted(
-      doc_scores.keys(), key=lambda x: doc_scores[x], reverse=True
-  )
-
-  merged_docs = []
-  for content in sorted_contents[:top_k]:
-    for doc in dense_docs + sparse_docs:
-      if doc.page_content == content:
-        merged_docs.append(doc)
-        break
-
-  return merged_docs
+  return dense_docs, sparse_docs, all_retrieved
 
 
 def math_rrf_rerank(
     faiss_chunks: list, bm25_chunks: list, top_k: int = 2
-) -> tuple[str, str]:
+) -> tuple[str, str, list]:
   """Reranks candidate chunks mathematically using Reciprocal Rank Fusion (RRF).
 
   Consumes 0 API calls and 0 MB RAM.
   """
   if not faiss_chunks and not bm25_chunks:
-    return "", ""
+    return "", "", []
 
   rrf_scores = {}
   chunk_map = {}
@@ -162,7 +148,8 @@ def math_rrf_rerank(
       "\n\n_Source: " + ", ".join(sources_set) + "_" if sources_set else ""
   )
 
-  return context, citation_footer
+  return context, citation_footer, top_docs
+
 
 def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
   """Cleans and formats retrieved chunks into a bulleted list if API limits are hit."""
@@ -218,9 +205,11 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
   try:
     # Step 1: Multi-Query Expansion & Hybrid Retrieval
     expanded_queries = multi_query_expansion(query, gemini_client)
-    retrieved_chunks = hybrid_retrieve(expanded_queries, top_k=6)
+    dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(
+        expanded_queries, top_k=6
+    )
 
-    if not retrieved_chunks:
+    if not all_retrieved:
       send_text(
           sender,
           "❌ I couldn't find relevant information in the HR policy"
@@ -229,8 +218,8 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
       return
 
     # Step 2: Context Re-ranking and Citation Extraction
-    context, citation_footer = math_rrf_rerank(
-        query, retrieved_chunks, gemini_client
+    context, citation_footer, top_docs = math_rrf_rerank(
+        dense_docs, sparse_docs, top_k=2
     )
 
     prompt = f"""
@@ -264,9 +253,7 @@ Question:
       logger.info(
           f"FALLING_BACK_TO_RAW_EXCERPTS | user={employee.get('employee_id')}"
       )
-      response_text, citation_footer = format_raw_chunks_fallback(
-          retrieved_chunks
-      )
+      response_text, citation_footer = format_raw_chunks_fallback(all_retrieved)
 
     # Step 5: Send final WhatsApp message with source citation footer
     final_whatsapp_msg = f"{response_text}{citation_footer}"

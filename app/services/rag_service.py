@@ -115,47 +115,75 @@ def hybrid_retrieve(queries: list[str], top_k: int = 6) -> list:
   return merged_docs
 
 
-def api_rerank(query: str, chunks: list, gemini_client) -> str:
-  """Reranks candidate chunks via Gemini API to filter top 2 most relevant passages."""
-  if not chunks:
-    return ""
+def math_rrf_rerank(
+    faiss_chunks: list, bm25_chunks: list, top_k: int = 2
+) -> tuple[str, str]:
+  """Reranks candidate chunks mathematically using Reciprocal Rank Fusion (RRF).
 
-  formatted_candidates = "\n---\n".join(
-      [f"Passage {idx+1}:\n{doc.page_content}" for idx, doc in enumerate(chunks)]
+  Consumes 0 API calls and 0 MB RAM.
+  """
+  if not faiss_chunks and not bm25_chunks:
+    return "", ""
+
+  rrf_scores = {}
+  chunk_map = {}
+
+  # Score FAISS vector ranks
+  for rank, doc in enumerate(faiss_chunks, start=1):
+    doc_id = doc.page_content
+    chunk_map[doc_id] = doc
+    rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (60 + rank))
+
+  # Score BM25 keyword ranks
+  for rank, doc in enumerate(bm25_chunks, start=1):
+    doc_id = doc.page_content
+    chunk_map[doc_id] = doc
+    rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (60 + rank))
+
+  # Sort chunks by highest RRF math score
+  sorted_docs = sorted(
+      rrf_scores.items(), key=lambda item: item[1], reverse=True
+  )
+  top_docs = [chunk_map[doc_id] for doc_id, score in sorted_docs[:top_k]]
+
+  # Format context string for Gemini
+  context = "\n---\n".join([d.page_content for d in top_docs])
+
+  # Extract official source citations for WhatsApp footer
+  sources_set = set()
+  for doc in top_docs:
+    source_file = doc.metadata.get("source", "")
+    page_num = doc.metadata.get("page", "")
+    if source_file:
+      page_text = f" (Page {page_num})" if page_num else ""
+      sources_set.add(f"📄 *{source_file}*{page_text}")
+
+  citation_footer = (
+      "\n\n_Source: " + ", ".join(sources_set) + "_" if sources_set else ""
   )
 
-  prompt = f"""
-    User Query: "{query}"
+  return context, citation_footer
 
-    Passages retrieved from HR policy files:
-    {formatted_candidates}
-
-    Select ONLY the 2 most relevant passages that directly answer the query. Return their exact text content concatenated together.
-    """
-
-  try:
-    response = gemini_client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-        config={"temperature": 0.0, "max_output_tokens": 400},
-    )
-    return response.text.strip()
-  except Exception as e:
-    logger.warning(f"RERANK_FALLBACK | Returning raw top chunks: {e}")
-    return "\n\n".join([doc.page_content for doc in chunks[:2]])
-
-
-def format_raw_chunks_fallback(chunks: list) -> str:
+def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
   """Cleans and formats retrieved chunks into a bulleted list if API limits are hit."""
   if not chunks:
     return (
-        "❌ I couldn't find any relevant policy information for your question."
+        "❌ I couldn't find any relevant policy information for your question.",
+        "",
     )
 
   clean_sentences = []
   seen = set()
+  sources_set = set()
 
   for doc in chunks[:3]:
+    # Extract sources for fallback citation
+    source_file = doc.metadata.get("source", "")
+    page_num = doc.metadata.get("page", "")
+    if source_file:
+      page_text = f" (Page {page_num})" if page_num else ""
+      sources_set.add(f"📄 *{source_file}*{page_text}")
+
     text = re.sub(r"\s+", " ", doc.page_content).strip()
 
     for sentence in text.split(". "):
@@ -169,12 +197,17 @@ def format_raw_chunks_fallback(chunks: list) -> str:
       break
 
   bullet_points = "\n".join([f"• {s}." for s in clean_sentences])
+  citation_footer = (
+      "\n\n_Source: " + ", ".join(sources_set) + "_" if sources_set else ""
+  )
 
-  return (
+  fallback_text = (
       "⚠️ *High server traffic. Here are relevant policy excerpts:* \n\n"
       f"{bullet_points}\n\n"
       "_Please try asking again in a minute for a full generated summary._"
   )
+
+  return fallback_text, citation_footer
 
 
 def handle_rag_query(employee, query: str, collection_unused, gemini_client):
@@ -195,21 +228,23 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
       )
       return
 
-    # Step 2: Context Re-ranking
-    context = api_rerank(query, retrieved_chunks, gemini_client)
+    # Step 2: Context Re-ranking and Citation Extraction
+    context, citation_footer = math_rrf_rerank(
+        query, retrieved_chunks, gemini_client
+    )
 
     prompt = f"""
-        Answer the employee question concise and professionally using ONLY the provided HR Policy Context.
-        Context:
-        {context}
+Answer the employee question concisely and professionally using ONLY the provided HR Policy Context.
+Context:
+{context}
 
-        Question:
-        {query}
-        """
+Question:
+{query}
+"""
 
     response_text = None
 
-    # Step 3: Attempt Primary Model
+    # Step 3: Primary Generation Call (gemini-2.5-flash)
     try:
       response = gemini_client.models.generate_content(
           model="gemini-2.5-flash",
@@ -218,31 +253,25 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
       )
       if response and response.text:
         response_text = response.text.strip()
-    except Exception as primary_err:
+    except Exception as err:
       logger.warning(
-          f"PRIMARY_LLM_FAILED | gemini-2.5-flash error: {primary_err}"
+          f"LLM_GENERATION_FAILED | gemini-2.5-flash error: {err}. Falling"
+          " back to raw excerpts."
       )
 
-      # Step 4: Attempt Fallback Model
-      try:
-        response = gemini_client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=prompt,
-            config={"temperature": 0.2, "max_output_tokens": 300},
-        )
-        if response and response.text:
-          response_text = response.text.strip()
-      except Exception as fallback_err:
-        logger.error(f"FALLBACK_LLM_FAILED | gemini-2.0-flash error: {fallback_err}")
-
-    # Step 5: Deliver Clean Formatted Excerpts if both LLMs fail
+    # Step 4: Deliver Clean Formatted Excerpts if API fails or rate-limits
     if not response_text:
       logger.info(
           f"FALLING_BACK_TO_RAW_EXCERPTS | user={employee.get('employee_id')}"
       )
-      response_text = format_raw_chunks_fallback(retrieved_chunks)
+      response_text, citation_footer = format_raw_chunks_fallback(
+          retrieved_chunks
+      )
 
-    send_text(sender, response_text)
+    # Step 5: Send final WhatsApp message with source citation footer
+    final_whatsapp_msg = f"{response_text}{citation_footer}"
+
+    send_text(sender, final_whatsapp_msg)
     logger.info(f"RAG_QUERY_SUCCESS | user={employee.get('employee_id')}")
 
   except Exception as e:

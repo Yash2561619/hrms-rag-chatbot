@@ -4,7 +4,7 @@ Includes Query Expansion, Hybrid FAISS + BM25 Search, Math RRF Re-Ranking, and
 Model Rate Limit Fallbacks. Location: app/services/rag_service.py
 """
 
-logging
+import logging
 import os
 import re
 from app.services.whatsapp_service import send_text

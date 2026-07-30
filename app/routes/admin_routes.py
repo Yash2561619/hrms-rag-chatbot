@@ -985,3 +985,124 @@ def delete_video(id):
     flash("❌ Failed to delete video.", "danger")
 
   return redirect(url_for("admin.upload_video"))
+
+
+ 
+import zipfile
+from database import get_employee, save_salary_slip
+
+
+
+MONTH_MAP = {
+    "january": 1,
+    "jan": 1,
+    "february": 2,
+    "feb": 2,
+    "march": 3,
+    "mar": 3,
+    "april": 4,
+    "apr": 4,
+    "may": 5,
+    "june": 6,
+    "jun": 6,
+    "july": 7,
+    "jul": 7,
+    "august": 8,
+    "aug": 8,
+    "september": 9,
+    "sep": 9,
+    "october": 10,
+    "oct": 10,
+    "november": 11,
+    "nov": 11,
+    "december": 12,
+    "dec": 12,
+}
+
+
+@admin_bp.route("/bulk-upload-salary", methods=["POST"])
+@login_required
+def bulk_upload_salary():
+  """Extracts a ZIP of salary slips and processes them in bulk."""
+  if "salary_zip" not in request.files:
+    flash("❌ No ZIP file uploaded", "danger")
+    return redirect(url_for("admin.upload_salary"))
+
+  file = request.files["salary_zip"]
+
+  if not file or not file.filename.endswith(".zip"):
+    flash("❌ Please upload a valid .zip file containing PDFs", "danger")
+    return redirect(url_for("admin.upload_salary"))
+
+  success_count = 0
+  error_count = 0
+
+  try:
+    with zipfile.ZipFile(file) as z:
+      seen_slips = set()
+      for filename in z.namelist():
+        # Ignore macOS metadata or non-PDF files
+        if filename.startswith("__MACOSX") or not filename.endswith(".pdf"):
+          continue
+
+        clean_filename = os.path.basename(filename)
+        if clean_filename in seen_slips:
+          logger.info(f"SKIPPING_DUPLICATE_IN_ZIP | file={clean_filename}")
+          continue
+
+        seen_slips.add(clean_filename)
+        if not clean_filename:
+          continue
+
+        # Expected Filename Pattern: EMP001_June_2026.pdf or EMP001_6_2026.pdf
+        name_parts = clean_filename.replace(".pdf", "").split("_")
+
+        if len(name_parts) < 3:
+          logger.warning(f"BULK_SALARY_SKIP | Invalid filename: {clean_filename}")
+          error_count += 1
+          continue
+
+        employee_id = name_parts[0].strip()
+        raw_month = name_parts[1].strip().lower()
+        year = int(name_parts[2].strip())
+
+        # Parse month number
+        month_num = (
+            int(raw_month)
+            if raw_month.isdigit()
+            else MONTH_MAP.get(raw_month, 0)
+        )
+
+        if not month_num or month_num < 1 or month_num > 12:
+          error_count += 1
+          continue
+
+        # Extract individual PDF binary from ZIP
+        pdf_bytes = z.read(filename)
+        file_obj = io.BytesIO(pdf_bytes)
+
+        # Generate unique filename & upload to S3
+        formatted_name = secure_filename(
+            f"{employee_id}_{month_num}_{year}.pdf"
+        )
+        s3_key = upload_salary_to_s3(file_obj, formatted_name)
+
+        # Save or Update record in PostgreSQL
+        save_salary_slip(employee_id, month_num, year, s3_key)
+        success_count += 1
+
+    log_activity(
+        f"💰 Bulk salary upload completed: {success_count} succeeded,"
+        f" {error_count} failed"
+    )
+    flash(
+        f"✅ Successfully processed {success_count} salary slips!"
+        + (f" ({error_count} skipped/failed)" if error_count > 0 else ""),
+        "success" if error_count == 0 else "warning",
+    )
+
+  except Exception as e:
+    logger.exception("BULK_SALARY_UPLOAD_ERROR")
+    flash(f"❌ Failed to process bulk ZIP file: {str(e)}", "danger")
+
+  return redirect(url_for("admin.upload_salary"))

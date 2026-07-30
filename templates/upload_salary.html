@@ -8,16 +8,12 @@
         Salary Slip Management
     </h2>
 
-    <!-- Upload Card -->
-
+    <!-- Single Upload Card -->
     <div class="card dashboard-panel mb-4">
 
         <div class="card-header panel-header">
-
             <i class="bi bi-cloud-upload-fill me-2"></i>
-
-            Upload Salary Slip
-
+            Upload Salary Slip (Single)
         </div>
 
         <div class="card-body">
@@ -29,40 +25,27 @@
                 <div class="row g-4">
 
                     <div class="col-lg-3">
-
                         <label class="form-label fw-semibold">
-
                             Employee
-
                         </label>
-
                         <select
                             name="employee_id"
                             class="form-select"
                             required>
 
                             {% for employee in employees %}
-
-                            <option value="{{ employee[0] }}">
-
-                                {{ employee[1] }} ({{ employee[0] }})
-
+                            <option value="{{ employee[0] if employee[0] is defined else employee['employee_id'] }}">
+                                {{ employee[1] if employee[1] is defined else employee['name'] }} ({{ employee[0] if employee[0] is defined else employee['employee_id'] }})
                             </option>
-
                             {% endfor %}
 
                         </select>
-
                     </div>
 
                     <div class="col-lg-2">
-
                         <label class="form-label fw-semibold">
-
                             Month
-
                         </label>
-
                         <select
                             name="month"
                             class="form-select"
@@ -82,54 +65,37 @@
                             <option>December</option>
 
                         </select>
-
                     </div>
 
                     <div class="col-lg-2">
-
                         <label class="form-label fw-semibold">
-
                             Year
-
                         </label>
-
                         <input
                             type="number"
                             name="year"
                             class="form-control"
                             value="2026"
                             required>
-
                     </div>
 
                     <div class="col-lg-3">
-
                         <label class="form-label fw-semibold">
-
                             Salary Slip (PDF)
-
                         </label>
-
                         <input
                             type="file"
                             name="salary_pdf"
                             class="form-control"
                             accept=".pdf"
                             required>
-
                     </div>
 
                     <div class="col-lg-2 d-flex align-items-end">
-
-                        <button
-                            class="btn btn-primary w-100">
-
+                        <button class="btn btn-primary w-100">
                             <i class="bi bi-upload me-2"></i>
-
                             Upload
-
                         </button>
-
                     </div>
 
                 </div>
@@ -140,16 +106,42 @@
 
     </div>
 
-    <!-- Uploaded Salary Slips -->
+    <!-- Bulk Upload (ZIP) Card -->
+    <div class="card dashboard-panel mb-4">
+        <div class="card-header panel-header bg-dark text-white">
+            <i class="bi bi-file-earmark-zip-fill me-2"></i>
+            Bulk Upload Salary Slips (ZIP Archive)
+        </div>
+        <div class="card-body">
+            <form action="{{ url_for('admin.bulk_upload_salary') }}" method="POST" enctype="multipart/form-data">
+                <div class="row g-3 align-items-center">
+                    <div class="col-lg-9">
+                        <label class="form-label fw-semibold">
+                            Select ZIP File (Containing Employee PDFs)
+                        </label>
+                        <input type="file" class="form-control" name="salary_zip" accept=".zip" required>
+                        <small class="text-muted d-block mt-2">
+                            <i class="bi bi-info-circle me-1"></i>
+                            <b>Required PDF Naming Convention inside ZIP:</b> <code>EMPLOYEEID_MONTH_YEAR.pdf</code> (e.g. <code>EMP001_June_2026.pdf</code> or <code>EMP001_6_2026.pdf</code>)
+                        </small>
+                    </div>
+                    <div class="col-lg-3 d-flex align-items-end mt-lg-0 mt-3">
+                        <button class="btn btn-success w-100 py-2">
+                            <i class="bi bi-file-zip-fill me-2"></i>
+                            Upload Bulk ZIP
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
 
+    <!-- Uploaded Salary Slips -->
     <div class="card dashboard-panel">
 
         <div class="card-header panel-header">
-
             <i class="bi bi-file-earmark-text-fill me-2"></i>
-
             Uploaded Salary Slips
-
         </div>
 
         <div class="card-body">
@@ -167,78 +159,70 @@
                         <div class="d-flex align-items-center">
 
                             <div class="policy-icon">
-
                                 <i class="bi bi-file-earmark-pdf-fill text-danger fs-1"></i>
-
                             </div>
 
                             <div class="ms-3">
-
                                 <h5 class="mb-1">
-
-                                    {{ slip.employee_name }}
-
+                                    {{ slip.employee_name if slip.employee_name is defined else slip[1] }}
                                 </h5>
-
                                 <small class="text-muted">
-
-                                    {{ slip.month }} {{ slip.year }}
-
+                                    {{ slip.month if slip.month is defined else slip[2] }} {{ slip.year if slip.year is defined else slip[3] }}
                                 </small>
-
                             </div>
 
                         </div>
 
                         <hr>
 
-<div class="d-flex justify-content-end">
+                        <div class="d-flex justify-content-end">
 
-    <div class="dropdown">
+                            <div class="dropdown">
 
-        <button
-            class="btn btn-primary btn-sm dropdown-toggle"
-            type="button"
-            data-bs-toggle="dropdown">
+                                <button
+                                    class="btn btn-primary btn-sm dropdown-toggle"
+                                    type="button"
+                                    data-bs-toggle="dropdown">
 
-            <i class="bi bi-gear-fill me-1"></i>
-            Operate
+                                    <i class="bi bi-gear-fill me-1"></i>
+                                    Operate
 
-        </button>
+                                </button>
 
-        <ul class="dropdown-menu dropdown-menu-end">
+                                <ul class="dropdown-menu dropdown-menu-end">
 
-            <li>
-                <a
-                    class="dropdown-item"
-                    href="{{ url_for('admin.view_salary_route', id=slip.id) }}"
-                    target="_blank">
+                                    <li>
+                                        <a
+                                            class="dropdown-item"
+                                            href="{{ url_for('admin.view_salary_route', id=slip.id if slip.id is defined else slip[0]) }}"
+                                            target="_blank">
 
-                    <i class="bi bi-eye-fill text-primary me-2"></i>
-                    View
+                                            <i class="bi bi-eye-fill text-primary me-2"></i>
+                                            View
 
-                </a>
-            </li>
+                                        </a>
+                                    </li>
 
-            <li><hr class="dropdown-divider"></li>
+                                    <li><hr class="dropdown-divider"></li>
 
-            <li>
-                <a
-                    class="dropdown-item text-danger"
-                    href="{{ url_for('admin.delete_salary_route', id=slip.id) }}"
-                    onclick="return confirm('Delete this salary slip?')">
+                                    <li>
+                                        <a
+                                            class="dropdown-item text-danger"
+                                            href="{{ url_for('admin.delete_salary_route', id=slip.id if slip.id is defined else slip[0]) }}"
+                                            onclick="return confirm('Delete this salary slip?')">
 
-                    <i class="bi bi-trash-fill me-2"></i>
-                    Delete
+                                            <i class="bi bi-trash-fill me-2"></i>
+                                            Delete
 
-                </a>
-            </li>
+                                        </a>
+                                    </li>
 
-        </ul>
+                                </ul>
 
-    </div>
+                            </div>
 
-</div>
+                        </div>
+
                     </div>
 
                 </div>
@@ -255,15 +239,11 @@
                    style="font-size:60px;"></i>
 
                 <h4 class="mt-3">
-
                     No Salary Slips Uploaded
-
                 </h4>
 
                 <p class="text-muted">
-
                     Upload the first salary slip above.
-
                 </p>
 
             </div>

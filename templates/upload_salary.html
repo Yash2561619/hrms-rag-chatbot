@@ -9,125 +9,98 @@
     </h2>
 
     <!-- Single Upload Card -->
-    <div class="card dashboard-panel mb-4">
-
-        <div class="card-header panel-header">
-            <i class="bi bi-cloud-upload-fill me-2"></i>
+    <div class="card dashboard-panel mb-4 shadow-sm border-0 rounded-4 overflow-hidden">
+        <div class="card-header panel-header bg-dark text-white py-3 px-4 fw-bold fs-5">
+            <i class="bi bi-cloud-upload-fill me-2 text-primary"></i>
             Upload Salary Slip (Single)
         </div>
 
-        <div class="card-body">
+        <div class="card-body p-4">
+            <form method="POST" enctype="multipart/form-data">
+                <div class="row g-3 align-items-end">
 
-            <form
-                method="POST"
-                enctype="multipart/form-data">
-
-                <div class="row g-4">
-
-                    <div class="col-lg-3">
-                        <label class="form-label fw-semibold">
+                    <div class="col-lg-3 col-md-6">
+                        <label class="form-label fw-semibold text-secondary mb-1">
                             Employee
                         </label>
-                        <select
-                            name="employee_id"
-                            class="form-select"
-                            required>
-
+                        <select name="employee_id" class="form-select shadow-none" required>
                             {% for employee in employees %}
                             <option value="{{ employee[0] if employee[0] is defined else employee['employee_id'] }}">
                                 {{ employee[1] if employee[1] is defined else employee['name'] }} ({{ employee[0] if employee[0] is defined else employee['employee_id'] }})
                             </option>
                             {% endfor %}
-
                         </select>
                     </div>
 
-                    <div class="col-lg-2">
-                        <label class="form-label fw-semibold">
+                    <div class="col-lg-2 col-md-6">
+                        <label class="form-label fw-semibold text-secondary mb-1">
                             Month
                         </label>
-                        <select
-                            name="month"
-                            class="form-select"
-                            required>
-
-                            <option>January</option>
-                            <option>February</option>
-                            <option>March</option>
-                            <option>April</option>
-                            <option>May</option>
-                            <option>June</option>
-                            <option>July</option>
-                            <option>August</option>
-                            <option>September</option>
-                            <option>October</option>
-                            <option>November</option>
-                            <option>December</option>
-
+                        <select name="month" class="form-select shadow-none" required>
+                            <option value="1">January</option>
+                            <option value="2">February</option>
+                            <option value="3">March</option>
+                            <option value="4">April</option>
+                            <option value="5">May</option>
+                            <option value="6">June</option>
+                            <option value="7">July</option>
+                            <option value="8">August</option>
+                            <option value="9">September</option>
+                            <option value="10">October</option>
+                            <option value="11">November</option>
+                            <option value="12">December</option>
                         </select>
                     </div>
 
-                    <div class="col-lg-2">
-                        <label class="form-label fw-semibold">
+                    <div class="col-lg-2 col-md-6">
+                        <label class="form-label fw-semibold text-secondary mb-1">
                             Year
                         </label>
-                        <input
-                            type="number"
-                            name="year"
-                            class="form-control"
-                            value="2026"
-                            required>
+                        <input type="number" name="year" class="form-control shadow-none" value="2026" required>
                     </div>
 
-                    <div class="col-lg-3">
-                        <label class="form-label fw-semibold">
+                    <div class="col-lg-3 col-md-6">
+                        <label class="form-label fw-semibold text-secondary mb-1">
                             Salary Slip (PDF)
                         </label>
-                        <input
-                            type="file"
-                            name="salary_pdf"
-                            class="form-control"
-                            accept=".pdf"
-                            required>
+                        <input type="file" name="salary_pdf" class="form-control shadow-none" accept=".pdf" required>
                     </div>
 
-                    <div class="col-lg-2 d-flex align-items-end">
-                        <button class="btn btn-primary w-100">
-                            <i class="bi bi-upload me-2"></i>
+                    <div class="col-lg-2 col-md-12">
+                        <button class="btn btn-primary w-100 py-2 fw-semibold">
+                            <i class="bi bi-upload me-1"></i>
                             Upload
                         </button>
                     </div>
 
                 </div>
-
             </form>
-
         </div>
-
     </div>
 
     <!-- Bulk Upload (ZIP) Card -->
-    <div class="card dashboard-panel mb-4">
-        <div class="card-header panel-header bg-dark text-white">
-            <i class="bi bi-file-earmark-zip-fill me-2"></i>
+    <div class="card dashboard-panel mb-4 shadow-sm border-0 rounded-4 overflow-hidden">
+        <div class="card-header panel-header bg-dark text-white py-3 px-4 fw-bold fs-5">
+            <i class="bi bi-file-earmark-zip-fill me-2 text-warning"></i>
             Bulk Upload Salary Slips (ZIP Archive)
         </div>
-        <div class="card-body">
+
+        <div class="card-body p-4">
             <form action="{{ url_for('admin.bulk_upload_salary') }}" method="POST" enctype="multipart/form-data">
                 <div class="row g-3 align-items-center">
                     <div class="col-lg-9">
-                        <label class="form-label fw-semibold">
+                        <label class="form-label fw-semibold text-secondary mb-1">
                             Select ZIP File (Containing Employee PDFs)
                         </label>
-                        <input type="file" class="form-control" name="salary_zip" accept=".zip" required>
+                        <input type="file" class="form-control shadow-none" name="salary_zip" accept=".zip" required>
                         <small class="text-muted d-block mt-2">
                             <i class="bi bi-info-circle me-1"></i>
-                            <b>Required PDF Naming Convention inside ZIP:</b> <code>EMPLOYEEID_MONTH_YEAR.pdf</code> (e.g. <code>EMP001_June_2026.pdf</code> or <code>EMP001_6_2026.pdf</code>)
+                            <b>Required PDF Naming Convention inside ZIP:</b> <code class="text-danger">EMPLOYEEID_MONTH_YEAR.pdf</code> (e.g. <code class="text-danger">EMP001_6_2026.pdf</code> or <code class="text-danger">EMP001_June_2026.pdf</code>)
                         </small>
                     </div>
                     <div class="col-lg-3 d-flex align-items-end mt-lg-0 mt-3">
-                        <button class="btn btn-success w-100 py-2">
-                            <i class="bi bi-file-zip-fill me-2"></i>
+                        <button class="btn btn-success w-100 py-2 fw-semibold">
+                            <i class="bi bi-file-zip-fill me-1"></i>
                             Upload Bulk ZIP
                         </button>
                     </div>
@@ -136,15 +109,14 @@
         </div>
     </div>
 
-    <!-- Uploaded Salary Slips -->
-    <div class="card dashboard-panel">
-
-        <div class="card-header panel-header">
-            <i class="bi bi-file-earmark-text-fill me-2"></i>
+    <!-- Uploaded Salary Slips Card -->
+    <div class="card dashboard-panel shadow-sm border-0 rounded-4 overflow-hidden">
+        <div class="card-header panel-header bg-dark text-white py-3 px-4 fw-bold fs-5">
+            <i class="bi bi-file-earmark-text-fill me-2 text-info"></i>
             Uploaded Salary Slips
         </div>
 
-        <div class="card-body">
+        <div class="card-body p-4">
 
             {% if salary_slips %}
 
@@ -152,79 +124,55 @@
 
                 {% for slip in salary_slips %}
 
+                {% set month_names = {
+                    '1': 'January', '2': 'February', '3': 'March', '4': 'April',
+                    '5': 'May', '6': 'June', '7': 'July', '8': 'August',
+                    '9': 'September', '10': 'October', '11': 'November', '12': 'December',
+                    1: 'January', 2: 'February', 3: 'March', 4: 'April',
+                    5: 'May', 6: 'June', 7: 'July', 8: 'August',
+                    9: 'September', 10: 'October', 11: 'November', 12: 'December'
+                } %}
+
+                {% set raw_month = slip.month if slip.month is defined else slip[2] %}
+                {% set display_month = month_names[raw_month] if raw_month in month_names else raw_month %}
+
                 <div class="col-lg-6">
+                    <div class="card border-0 shadow-sm p-4 rounded-4 h-100 bg-white">
 
-                    <div class="card border shadow-sm p-3">
-
-                        <div class="d-flex align-items-center">
-
-                            <div class="policy-icon">
-                                <i class="bi bi-file-earmark-pdf-fill text-danger fs-1"></i>
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="p-3 bg-danger bg-opacity-10 rounded-3 me-3">
+                                <i class="bi bi-file-earmark-pdf-fill text-danger fs-2"></i>
                             </div>
 
-                            <div class="ms-3">
-                                <h5 class="mb-1">
+                            <div>
+                                <h5 class="mb-1 fw-bold text-dark">
                                     {{ slip.employee_name if slip.employee_name is defined else slip[1] }}
                                 </h5>
-                                <small class="text-muted">
-                                    {{ slip.month if slip.month is defined else slip[2] }} {{ slip.year if slip.year is defined else slip[3] }}
-                                </small>
+                                <div class="d-flex align-items-center gap-2">
+                                    <span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 px-2 py-1 fs-6">
+                                        {{ display_month }} {{ slip.year if slip.year is defined else slip[3] }}
+                                    </span>
+                                </div>
                             </div>
-
                         </div>
 
-                        <hr>
+                        <hr class="text-muted opacity-25 my-2">
 
-                        <div class="d-flex justify-content-end">
+                        <div class="d-flex justify-content-end gap-2 mt-3">
+                            <a href="{{ url_for('admin.view_salary_route', id=slip.id if slip.id is defined else slip[0]) }}"
+                               target="_blank"
+                               class="btn btn-outline-primary btn-sm px-3 rounded-2 fw-medium">
+                                <i class="bi bi-eye-fill me-1"></i> View
+                            </a>
 
-                            <div class="dropdown">
-
-                                <button
-                                    class="btn btn-primary btn-sm dropdown-toggle"
-                                    type="button"
-                                    data-bs-toggle="dropdown">
-
-                                    <i class="bi bi-gear-fill me-1"></i>
-                                    Operate
-
-                                </button>
-
-                                <ul class="dropdown-menu dropdown-menu-end">
-
-                                    <li>
-                                        <a
-                                            class="dropdown-item"
-                                            href="{{ url_for('admin.view_salary_route', id=slip.id if slip.id is defined else slip[0]) }}"
-                                            target="_blank">
-
-                                            <i class="bi bi-eye-fill text-primary me-2"></i>
-                                            View
-
-                                        </a>
-                                    </li>
-
-                                    <li><hr class="dropdown-divider"></li>
-
-                                    <li>
-                                        <a
-                                            class="dropdown-item text-danger"
-                                            href="{{ url_for('admin.delete_salary_route', id=slip.id if slip.id is defined else slip[0]) }}"
-                                            onclick="return confirm('Delete this salary slip?')">
-
-                                            <i class="bi bi-trash-fill me-2"></i>
-                                            Delete
-
-                                        </a>
-                                    </li>
-
-                                </ul>
-
-                            </div>
-
+                            <a href="{{ url_for('admin.delete_salary_route', id=slip.id if slip.id is defined else slip[0]) }}"
+                               onclick="return confirm('Delete this salary slip?')"
+                               class="btn btn-outline-danger btn-sm px-3 rounded-2 fw-medium">
+                                <i class="bi bi-trash-fill me-1"></i> Delete
+                            </a>
                         </div>
 
                     </div>
-
                 </div>
 
                 {% endfor %}
@@ -234,24 +182,14 @@
             {% else %}
 
             <div class="text-center py-5">
-
-                <i class="bi bi-folder2-open text-secondary"
-                   style="font-size:60px;"></i>
-
-                <h4 class="mt-3">
-                    No Salary Slips Uploaded
-                </h4>
-
-                <p class="text-muted">
-                    Upload the first salary slip above.
-                </p>
-
+                <i class="bi bi-folder2-open text-secondary" style="font-size:60px;"></i>
+                <h4 class="mt-3">No Salary Slips Uploaded</h4>
+                <p class="text-muted">Upload the first salary slip using the forms above.</p>
             </div>
 
             {% endif %}
 
         </div>
-
     </div>
 
 </div>

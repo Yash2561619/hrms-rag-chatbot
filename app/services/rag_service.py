@@ -11,7 +11,7 @@ from app.services.whatsapp_service import send_text
 from langchain_community.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from rank_bm25 import BM25Okapi
-
+from app.services.memory_service import add_to_chat_history, get_chat_history
 logger = logging.getLogger(__name__)
 
 # Global index references cached in RAM
@@ -197,13 +197,18 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
   return fallback_text, citation_footer
 
 
+
+
 def handle_rag_query(employee, query: str, collection_unused, gemini_client):
-  """Main entry point for handling employee policy questions with Advanced RAG."""
   sender = employee["whatsapp"]
-  logger.info(f"RAG_QUERY_START | user={employee.get('employee_id')}")
+  employee_id = employee.get("employee_id")
+  logger.info(f"RAG_QUERY_START | user={employee_id}")
 
   try:
-    # Step 1: Multi-Query Expansion & Hybrid Retrieval
+    # 1. Fetch past conversation history from Upstash Redis
+    chat_history_str = get_chat_history(employee_id, max_messages=4)
+
+    # 2. Multi-Query Expansion & Hybrid Retrieval
     expanded_queries = multi_query_expansion(query, gemini_client)
     dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(
         expanded_queries, top_k=6
@@ -217,23 +222,29 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
       )
       return
 
-    # Step 2: Context Re-ranking and Citation Extraction
+    # 3. Math RRF Re-ranking
     context, citation_footer, top_docs = math_rrf_rerank(
         dense_docs, sparse_docs, top_k=2
     )
 
+    # 4. Context-Aware Prompt with Memory
     prompt = f"""
 Answer the employee question concisely and professionally using ONLY the provided HR Policy Context.
-Context:
+Use the Conversation History to resolve follow-up pronouns like "it", "that policy", "this", or "them".
+
+Conversation History:
+{chat_history_str}
+
+HR Policy Context:
 {context}
 
-Question:
+Current Question:
 {query}
 """
 
     response_text = None
 
-    # Step 3: Primary Generation Call (gemini-2.5-flash)
+    # 5. Primary LLM Generation Call
     try:
       response = gemini_client.models.generate_content(
           model="gemini-2.5-flash",
@@ -243,26 +254,23 @@ Question:
       if response and response.text:
         response_text = response.text.strip()
     except Exception as err:
-      logger.warning(
-          f"LLM_GENERATION_FAILED | gemini-2.5-flash error: {err}. Falling"
-          " back to raw excerpts."
-      )
+      logger.warning(f"LLM_GENERATION_FAILED | error: {err}")
 
-    # Step 4: Deliver Clean Formatted Excerpts if API fails or rate-limits
+    # Fallback to raw excerpts if API fails
     if not response_text:
-      logger.info(
-          f"FALLING_BACK_TO_RAW_EXCERPTS | user={employee.get('employee_id')}"
-      )
       response_text, citation_footer = format_raw_chunks_fallback(all_retrieved)
 
-    # Step 5: Send final WhatsApp message with source citation footer
-    final_whatsapp_msg = f"{response_text}{citation_footer}"
+    # 6. Save successful interaction to Upstash Redis Memory
+    if response_text:
+      add_to_chat_history(employee_id, query, response_text)
 
+    # 7. Send WhatsApp response
+    final_whatsapp_msg = f"{response_text}{citation_footer}"
     send_text(sender, final_whatsapp_msg)
-    logger.info(f"RAG_QUERY_SUCCESS | user={employee.get('employee_id')}")
+    logger.info(f"RAG_QUERY_SUCCESS | user={employee_id}")
 
   except Exception as e:
-    logger.exception(f"RAG_FATAL_ERROR | user={employee.get('employee_id')}")
+    logger.exception(f"RAG_FATAL_ERROR | user={employee_id}")
     send_text(
         sender,
         "❌ An error occurred while processing your policy request. Please try"

@@ -466,106 +466,108 @@ def edit_employee(employee_id):
         employee=employee
     )
 
-@admin_bp.route('/delete-employee/<employee_id>')
+@admin_bp.route("/delete-employee/<employee_id>")
 @login_required
 def delete_employee_route(employee_id):
-    """Delete employee"""
-    
-    try:
-        employee = get_employee(employee_id)
-        
-        if not employee:
-            flash('❌ Employee not found')
-            return redirect(url_for('admin.employees'))
+  """Delete employee."""
 
-        delete_employee(employee_id)
-        
-        log_activity(f'🗑️ Employee deleted: {employee[1]} ({employee_id})')
-        flash('✅ Employee deleted successfully!')
+  try:
+    employee = get_employee(employee_id)
 
-    except Exception as e:
-        logger.exception('DELETE_EMPLOYEE_ERROR')
-        flash('❌ Failed to delete employee')
+    if not employee:
+      flash("❌ Employee not found")
+      return redirect(url_for("admin.employees"))
 
-    return redirect(url_for('admin.employees'))
+    delete_employee(employee_id)
+
+    # Handles both tuple and dictionary returns safely
+    emp_name = employee[1] if isinstance(employee, tuple) else employee.get("name", employee_id)
+
+    log_activity(f"🗑️ Employee deleted: {emp_name} ({employee_id})")
+    flash("✅ Employee deleted successfully!")
+
+  except Exception as e:
+    logger.exception("DELETE_EMPLOYEE_ERROR")
+    flash("❌ Failed to delete employee")
+
+  return redirect(url_for("admin.employees"))
 
 
 # =====================================================
 # LEAVE MANAGEMENT
 # =====================================================
 
-@admin_bp.route('/leave-requests')
+
+@admin_bp.route("/leave-requests")
 @login_required
 def leave_requests():
-    """List all leave requests"""
-    
-    try:
-        leaves = get_all_leave_requests()
+  """List all leave requests."""
 
-        if not leaves:
-            pending_count = 0
-            approved_count = 0
-            active_count = 0
-        else:
-            pending_count = sum(1 for l in leaves if l[7] == 'Pending')
-            approved_count = sum(1 for l in leaves if l[7] == 'Approved')
-            active_count = approved_count
+  try:
+    leaves = get_all_leave_requests()
 
-        return render_template(
-            'leave_requests.html',
-            leaves=leaves,
-            pending_count=pending_count,
-            approved_count=approved_count,
-            active_count=active_count
-        )
+    if not leaves:
+      pending_count = 0
+      approved_count = 0
+      active_count = 0
+    else:
+      pending_count = sum(1 for l in leaves if l[7] == "Pending")
+      approved_count = sum(1 for l in leaves if l[7] == "Approved")
+      active_count = approved_count
 
-    except Exception as e:
-        logger.exception('LEAVE_REQUESTS_PAGE_ERROR')
-        flash('❌ Failed to load leave requests')
-        return redirect(url_for('admin.admin_dashboard'))
+    return render_template(
+        "leave_requests.html",
+        leaves=leaves,
+        pending_count=pending_count,
+        approved_count=approved_count,
+        active_count=active_count,
+    )
+
+  except Exception as e:
+    logger.exception("LEAVE_REQUESTS_PAGE_ERROR")
+    flash("❌ Failed to load leave requests")
+    return redirect(url_for("admin.admin_dashboard"))
 
 
-@admin_bp.route('/approve-leave/<int:request_id>')
+@admin_bp.route("/approve-leave/<int:request_id>")
 @login_required
 def approve_leave(request_id):
-    """Approve leave request"""
-    
-    try:
-        leave = get_leave_details(request_id)
+  """Approve leave request."""
 
-        if not leave:
-            logger.warning(f'Leave request {request_id} not found')
-            flash('❌ Leave request not found')
-            return redirect(url_for('admin.leave_requests'))
+  try:
+    leave = get_leave_details(request_id)
 
-        # Check leave balance
-        allowed, message = can_approve_leave(
-            leave['employee_id'],
-            leave['leave_type'],
-            leave['leave_days']
-        )
+    if not leave:
+      logger.warning(f"Leave request {request_id} not found")
+      flash("❌ Leave request not found")
+      return redirect(url_for("admin.leave_requests"))
 
-        if not allowed:
-            logger.warning(f'LEAVE_APPROVAL_BLOCKED: {message}')
-            log_activity(
-                f'❌ Leave approval blocked for {leave["name"]} ({message})'
-            )
-            flash(f'❌ Cannot approve: {message}')
-            return redirect(url_for('admin.leave_requests'))
+    # Check leave balance
+    allowed, message = can_approve_leave(
+        leave["employee_id"], leave["leave_type"], leave["leave_days"]
+    )
 
-        # Approve leave
-        update_leave_status(request_id, 'Approved')
+    if not allowed:
+      logger.warning(f"LEAVE_APPROVAL_BLOCKED: {message}")
+      log_activity(
+          f"❌ Leave approval blocked for {leave['name']} ({message})"
+      )
+      flash(f"❌ Cannot approve: {message}")
+      return redirect(url_for("admin.leave_requests"))
 
-        # Get updated details
-        leave = get_leave_details(request_id)
+    # Approve leave
+    update_leave_status(request_id, "Approved")
 
-        # Log activity
-        log_activity(f'✅ Leave approved for {leave["name"]}')
+    # Get updated details
+    leave = get_leave_details(request_id)
 
-        # Notify employee
-        send_text(
-            leave['whatsapp'],
-            f'''✅ Leave Approved
+    # Log activity
+    log_activity(f"✅ Leave approved for {leave['name']}")
+
+    # Notify employee
+    send_text(
+        leave["whatsapp"],
+        f"""✅ Leave Approved
 
 Employee: {leave["name"]}
 Type: {leave["leave_type"]}
@@ -577,39 +579,39 @@ Total Days: {leave["leave_days"]}
 
 Approved by: {leave["manager"]}
 Status: Approved ✓
-'''
-        )
+""",
+    )
 
-        flash('✅ Leave approved successfully!')
-        logger.info(f'Leave {request_id} approved')
+    flash("✅ Leave approved successfully!")
+    logger.info(f"Leave {request_id} approved")
 
-    except Exception as e:
-        logger.exception(f'APPROVE_LEAVE_ERROR: {request_id}')
-        flash('❌ Failed to approve leave')
+  except Exception as e:
+    logger.exception(f"APPROVE_LEAVE_ERROR: {request_id}")
+    flash("❌ Failed to approve leave")
 
-    return redirect(url_for('admin.leave_requests'))
+  return redirect(url_for("admin.leave_requests"))
 
 
-@admin_bp.route('/reject-leave/<int:request_id>')
+@admin_bp.route("/reject-leave/<int:request_id>")
 @login_required
 def reject_leave(request_id):
-    """Reject leave request"""
-    
-    try:
-        # Update status first
-        update_leave_status(request_id, 'Rejected')
+  """Reject leave request."""
 
-        # Get leave details
-        leave = get_leave_details(request_id)
+  try:
+    # Update status first
+    update_leave_status(request_id, "Rejected")
 
-        if leave:
-            # Log activity
-            log_activity(f'❌ Leave rejected for {leave["name"]}')
+    # Get leave details
+    leave = get_leave_details(request_id)
 
-            # Notify employee
-            send_text(
-                leave['whatsapp'],
-                f'''❌ Leave Rejected
+    if leave:
+      # Log activity
+      log_activity(f"❌ Leave rejected for {leave['name']}")
+
+      # Notify employee
+      send_text(
+          leave["whatsapp"],
+          f"""❌ Leave Rejected
 
 Employee: {leave["name"]}
 
@@ -623,109 +625,102 @@ Rejected by:
 {leave["manager"]}
 
 Status: Rejected ✗
-'''
-            )
+""",
+      )
 
-        flash('✅ Leave rejected successfully!')
-        logger.info(f'Leave {request_id} rejected')
+    flash("✅ Leave rejected successfully!")
+    logger.info(f"Leave {request_id} rejected")
 
-    except Exception as e:
-        logger.exception(f'REJECT_LEAVE_ERROR: {request_id}')
-        flash('❌ Failed to reject leave')
+  except Exception as e:
+    logger.exception(f"REJECT_LEAVE_ERROR: {request_id}")
+    flash("❌ Failed to reject leave")
 
-    return redirect(url_for('admin.leave_requests'))
-
-
+  return redirect(url_for("admin.leave_requests"))
 
 
 # =====================================================
-# SALARY SLIPS (Optional routes - add if needed)
+# SALARY SLIPS
 # =====================================================
 
-@admin_bp.route('/upload-salary', methods=['GET', 'POST'])
+
+@admin_bp.route("/upload-salary", methods=["GET", "POST"])
 @login_required
 def upload_salary():
-    """Upload salary slip"""
-    
-    if request.method == 'POST':
-        
-        try:
-            employee_id = request.form.get('employee_id', '').strip()
-            month = request.form.get('month')
-            year = int(request.form.get('year'))
+  """Upload salary slip."""
 
-            month_map = {
-              'January': 1,
-              'February': 2,
-              'March': 3,
-              'April': 4,
-              'May': 5,
-              'June': 6,
-              'July': 7,
-              'August': 8,
-              'September': 9,
-              'October': 10,
-              'November': 11,
-              'December': 12
-}
-            if str(month).isdigit():
-               month = int(month)
-            else:
-               month = month_map[month]
+  if request.method == "POST":
 
-            if 'salary_pdf' not in request.files:
-                flash('❌ No file selected')
-                return redirect(url_for('admin.upload_salary'))
+    try:
+      employee_id = request.form.get("employee_id", "").strip()
+      month = request.form.get("month")
+      year = int(request.form.get("year"))
 
-            file = request.files['salary_pdf']
+      month_map = {
+          "January": 1,
+          "February": 2,
+          "March": 3,
+          "April": 4,
+          "May": 5,
+          "June": 6,
+          "July": 7,
+          "August": 8,
+          "September": 9,
+          "October": 10,
+          "November": 11,
+          "December": 12,
+      }
+      if str(month).isdigit():
+        month = int(month)
+      else:
+        month = month_map[month]
 
-            if not file or file.filename == '':
-                flash('❌ No file selected')
-                return redirect(url_for('admin.upload_salary'))
+      if "salary_pdf" not in request.files:
+        flash("❌ No file selected")
+        return redirect(url_for("admin.upload_salary"))
 
-            if not file.filename.endswith('.pdf'):
-                flash('❌ Only PDF files allowed')
-                return redirect(url_for('admin.upload_salary'))
+      file = request.files["salary_pdf"]
 
-            # Save file
-            from app.services.s3_service import upload_salary_to_s3
+      if not file or file.filename == "":
+        flash("❌ No file selected")
+        return redirect(url_for("admin.upload_salary"))
 
-# Generate filename
-            filename = secure_filename(f'{employee_id}_{month}_{year}.pdf')
+      if not file.filename.endswith(".pdf"):
+        flash("❌ Only PDF files allowed")
+        return redirect(url_for("admin.upload_salary"))
 
-# Upload directly to S3
-            s3_key = upload_salary_to_s3(file, filename)
+      # Generate filename
+      filename = secure_filename(f"{employee_id}_{month}_{year}.pdf")
 
-            logger.info(f'SALARY_UPLOADED_TO_S3 | key={s3_key}')
+      # Upload directly to S3
+      s3_key = upload_salary_to_s3(file, filename)
 
-# Save S3 key in database
-            save_salary_slip(employee_id, month, year, s3_key)
+      logger.info(f"SALARY_UPLOADED_TO_S3 | key={s3_key}")
 
-            log_activity(f'💰 Salary slip uploaded for {employee_id} ({month}/{year})')
-            flash('✅ Salary slip uploaded successfully!')
+      # Save S3 key in database
+      save_salary_slip(employee_id, month, year, s3_key)
 
-            return redirect(url_for('admin.upload_salary'))
+      log_activity(
+          f"💰 Salary slip uploaded for {employee_id} ({month}/{year})"
+      )
+      flash("✅ Salary slip uploaded successfully!")
 
-        except Exception as e:
-            logger.exception('UPLOAD_SALARY_ERROR')
-            flash('❌ Failed to upload salary slip')
+      return redirect(url_for("admin.upload_salary"))
 
-    employees_list = get_all_employees()
-    salary_slips = get_all_salary_slips()
+    except Exception as e:
+      logger.exception("UPLOAD_SALARY_ERROR")
+      flash("❌ Failed to upload salary slip")
 
-    return render_template(
-        'upload_salary.html',
-        employees=employees_list,
-        salary_slips=salary_slips
-    )
+  employees_list = get_all_employees()
+  salary_slips = get_all_salary_slips()
+
+  return render_template(
+      "upload_salary.html", employees=employees_list, salary_slips=salary_slips
+  )
 
 
 # =====================================================
 # POLICY MANAGEMENT
 # =====================================================
-
-
-from app.services.s3_service import sync_faiss_from_s3, upload_policy_to_s3
 
 
 @admin_bp.route("/policy-management", methods=["GET", "POST"])
@@ -775,8 +770,7 @@ def policy_management():
 
       logger.info(f"POLICY_UPLOADED_TO_S3 | key={s3_key}")
 
-      # 4. TRY SYNCING RECENT FAISS INDEX FROM S3
-      # FIX 2: Call sync_faiss_from_s3() instead of sync_chroma_from_s3()
+      # 4. Sync FAISS index from S3
       synced = sync_faiss_from_s3()
 
       log_activity(f"📚 Policy uploaded to S3: {filename}")
@@ -793,7 +787,6 @@ def policy_management():
             "info",
         )
 
-      # 5. Fast redirect response (zero Gunicorn timeouts)
       return redirect(url_for("admin.policy_management"))
 
     except Exception as e:
@@ -801,7 +794,6 @@ def policy_management():
       flash("❌ Failed to upload policy", "danger")
 
     finally:
-      # Clean up local temp file
       if temp_filepath and os.path.exists(temp_filepath):
         try:
           os.remove(temp_filepath)
@@ -811,16 +803,15 @@ def policy_management():
   policies = get_all_policy_files()
   return render_template("policy_management.html", policies=policies)
 
+
 @admin_bp.route("/delete-policy/<path:filename>", methods=["GET", "POST"])
 @login_required
 def delete_policy(filename):
   """Delete policy file from S3 and update tracking registry."""
   try:
-    # 1. Delete PDF from S3 bucket
     s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=f"policies/{filename}")
     logger.info(f"S3_DELETED | file={filename}")
 
-    # 2. Remove entry from local PDF registry JSON if available
     try:
       registry = load_pdf_registry()
       if filename in registry:
@@ -828,7 +819,9 @@ def delete_policy(filename):
         save_pdf_registry(registry)
         logger.info(f"REGISTRY_DELETED | file={filename}")
     except Exception as e:
-      logger.warning(f"REGISTRY_UPDATE_SKIPPED | file={filename} | error={e}")
+      logger.warning(
+          f"REGISTRY_UPDATE_SKIPPED | file={filename} | error={e}"
+      )
 
     flash(
         f"Successfully deleted {filename}. Run Colab indexer to update FAISS.",
@@ -840,130 +833,121 @@ def delete_policy(filename):
 
   return redirect(url_for("admin.policy_management"))
 
+
 @admin_bp.route("/download-policy/<filename>")
 @login_required
 def download_policy(filename):
-    s3_key = f"policies/{filename}"
-    url = generate_presigned_url(s3_key)
-    return redirect(url)
+  s3_key = f"policies/{filename}"
+  url = generate_presigned_url(s3_key)
+  return redirect(url)
 
 
 @admin_bp.route("/view-policy/<filename>")
 @login_required
 def view_policy(filename):
-    s3_key = f"policies/{filename}"
-    url = generate_presigned_url(s3_key)
-    return redirect(url)
+  s3_key = f"policies/{filename}"
+  url = generate_presigned_url(s3_key)
+  return redirect(url)
 
 
 @admin_bp.route("/view-salary/<int:id>")
 @login_required
 def view_salary_route(id):
+  conn = get_connection()
+  cursor = conn.cursor()
 
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
+  # FIX: Updated SQLite '?' to PostgreSQL '%s'
+  cursor.execute(
+      """
         SELECT file_path
         FROM salary_slips
-        WHERE id=?
-    """, (id,))
+        WHERE id=%s
+    """,
+      (id,),
+  )
 
-    row = cursor.fetchone()
-    conn.close()
+  row = cursor.fetchone()
+  cursor.close()
+  conn.close()
 
-    if not row:
-        flash("❌ Salary slip not found.")
-        return redirect(url_for("admin.upload_salary"))
+  if not row:
+    flash("❌ Salary slip not found.")
+    return redirect(url_for("admin.upload_salary"))
 
-    s3_key = row[0]
-
-    # Generate temporary S3 URL
-    url = generate_presigned_url(s3_key)
-
-    # Open PDF directly from S3
-    return redirect(url)
+  s3_key = row[0]
+  url = generate_presigned_url(s3_key)
+  return redirect(url)
 
 
 @admin_bp.route("/delete-salary/<int:id>")
 @login_required
 def delete_salary_route(id):
+  conn = get_connection()
+  cursor = conn.cursor()
 
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
+  # FIX: Updated SQLite '?' to PostgreSQL '%s'
+  cursor.execute(
+      """
         SELECT file_path
         FROM salary_slips
-        WHERE id=?
-    """, (id,))
+        WHERE id=%s
+    """,
+      (id,),
+  )
 
-    row = cursor.fetchone()
+  row = cursor.fetchone()
 
-    if not row:
-        conn.close()
-        flash("❌ Salary slip not found.")
-        return redirect(url_for("admin.upload_salary"))
-
-    s3_key = row[0]
-
-    # Delete file from S3
-    delete_file_from_s3(s3_key)
-
-    # Delete database record
-    cursor.execute("""
-        DELETE FROM salary_slips
-        WHERE id=?
-    """, (id,))
-
-    conn.commit()
+  if not row:
+    cursor.close()
     conn.close()
-
-    flash("✅ Salary slip deleted successfully!")
-
-    log_activity(f"Deleted salary slip: {s3_key}")
-
+    flash("❌ Salary slip not found.")
     return redirect(url_for("admin.upload_salary"))
+
+  s3_key = row[0]
+
+  # Delete file from S3
+  delete_file_from_s3(s3_key)
+
+  # FIX: Updated SQLite '?' to PostgreSQL '%s'
+  cursor.execute(
+      """
+        DELETE FROM salary_slips
+        WHERE id=%s
+    """,
+      (id,),
+  )
+
+  conn.commit()
+  cursor.close()
+  conn.close()
+
+  flash("✅ Salary slip deleted successfully!")
+  log_activity(f"Deleted salary slip: {s3_key}")
+
+  return redirect(url_for("admin.upload_salary"))
+
 
 @admin_bp.route("/upload-video", methods=["GET", "POST"])
 @login_required
 def upload_video():
+  if request.method == "POST":
+    title = request.form.get("title")
+    category = request.form.get("category")
+    file = request.files["video"]
 
-    if request.method == "POST":
+    if file.filename == "":
+      flash("Select a video")
+      return redirect(request.url)
 
-        title = request.form.get("title")
-        category = request.form.get("category")
+    filename = secure_filename(file.filename)
+    s3_key = upload_video_to_s3(file, filename)
 
-        file = request.files["video"]
+    save_training_video(title=title, category=category, s3_key=s3_key)
+    logger.info("VIDEO_SAVED_IN_DATABASE")
 
-        if file.filename == "":
-            flash("Select a video")
-            return redirect(request.url)
+    flash("✅ Video uploaded successfully")
+    return redirect(url_for("admin.upload_video"))
 
-        filename = secure_filename(file.filename)
+  videos = get_all_training_videos()
 
-        s3_key = upload_video_to_s3(file, filename)
-
-        print("=" * 50)
-        print("TITLE:", title)
-        print("CATEGORY:", category)
-        print("S3 KEY:", s3_key)
-        print("=" * 50)
-
-        save_training_video(
-            title=title,
-            category=category,
-            s3_key=s3_key
-        )
-        logger.info("VIDEO_SAVED_IN_DATABASE")
-        print("SAVE FUNCTION COMPLETED")
-
-        flash("✅ Video uploaded successfully")
-        return redirect(url_for("admin.upload_video"))
-
-    videos = get_all_training_videos()
-
-    return render_template(
-        "upload_video.html",
-        videos=videos
-    )
+  return render_template("upload_video.html", videos=videos)

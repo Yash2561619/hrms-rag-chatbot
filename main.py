@@ -1,12 +1,13 @@
-"""
-WhatsApp HR Assistant - Main Flask Application (OPTIMIZED WITH FAISS + S3)
-Webhook server using FAISS and Gemini API for ultra-fast, zero-lock RAG on Render.
+"""WhatsApp HR Assistant - Main Flask Application (OPTIMIZED WITH FAISS + S3 & POSTGRESQL)
+
+Webhook server using FAISS, Neon PostgreSQL, and Gemini API for ultra-fast RAG on Render.
 """
 
 import logging
 import os
 import sys
 import threading
+import time
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
@@ -91,6 +92,7 @@ def init_gemini():
     except Exception as e:
       logger.error(f"[STARTUP] ❌ Gemini initialization failed: {e}")
 
+
 def startup_background_tasks():
   """Runs once on application startup."""
   global _initialized
@@ -101,25 +103,30 @@ def startup_background_tasks():
   logger.info("STARTING APP INITIALIZATION")
   logger.info("=" * 50)
 
+  # 1. Initialize PostgreSQL Database Tables
   try:
     initialize_database()
+    logger.info("[STARTUP] ✅ PostgreSQL database initialized")
   except Exception as e:
-    logger.error(f"[STARTUP] Database init error: {e}")
+    logger.error(f"[STARTUP] PostgreSQL DB init error: {e}")
 
-  # 1. Pull latest FAISS index from S3
+  # 2. Pull latest FAISS index from S3
   try:
     sync_faiss_from_s3()
+    logger.info("[STARTUP] ✅ FAISS index synced from S3")
   except Exception as e:
     logger.error(f"[STARTUP] S3 sync error: {e}")
 
-  # 2. Pre-warm FAISS and BM25 indexes in memory
+  # 3. Pre-warm FAISS and BM25 indexes in memory
   try:
     from app.services.rag_service import load_indexes
 
     load_indexes()
+    logger.info("[STARTUP] ✅ Indexes pre-warmed successfully")
   except Exception as e:
     logger.error(f"[STARTUP] Index pre-warm error: {e}")
 
+  # 4. Initialize Gemini Client
   try:
     init_gemini()
   except Exception as e:
@@ -225,8 +232,10 @@ def verify():
   logger.warning("WEBHOOK_VERIFICATION_FAILED")
   return "Forbidden", 403
 
+
 PROCESSED_MESSAGE_IDS = {}
-import time
+
+
 def is_duplicate_message(message_id: str) -> bool:
   """Checks if WhatsApp webhook message ID was already processed in the last 60 seconds."""
   if not message_id:
@@ -234,7 +243,7 @@ def is_duplicate_message(message_id: str) -> bool:
 
   now = time.time()
 
-  # Clean up old message IDs (> 60 seconds old) to keep RAM footprint near 0
+  # Clean up old message IDs (> 60 seconds old)
   expired_keys = [k for k, v in PROCESSED_MESSAGE_IDS.items() if now - v > 60]
   for k in expired_keys:
     del PROCESSED_MESSAGE_IDS[k]
@@ -266,7 +275,7 @@ def webhook():
     message = value["messages"][0]
     message_id = message.get("id")
 
-    # 1. STEP 1: Deduplication Guard (Check before doing ANY work)
+    # 1. STEP 1: Deduplication Guard
     if is_duplicate_message(message_id):
       logger.info(f"DUPLICATE_WEBHOOK_SKIPPED | message_id={message_id}")
       return "OK", 200
@@ -331,14 +340,15 @@ def webhook():
   # Return HTTP 200 immediately to Meta
   return "OK", 200
 
+
 @app.route("/health", methods=["GET"])
 def health():
-  """Health check endpoint for deployment platforms like Render."""
+  """Health check endpoint for Render."""
   faiss_exists = os.path.exists("faiss_index")
 
   return {
       "status": "healthy",
-      "database": "connected",
+      "database": "postgresql_connected",
       "faiss_index": "ready" if faiss_exists else "not_ready",
       "gemini_client": (
           "initialized" if gemini_client else "not_initialized"

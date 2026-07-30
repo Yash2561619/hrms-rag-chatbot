@@ -1,72 +1,55 @@
-import sqlite3
-from pathlib import Path
+import os
+import psycopg2
 from werkzeug.security import generate_password_hash
 
-# =====================================================
-# DATABASE PATH
-# =====================================================
-BASE_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = BASE_DIR / 'data' / 'employee.db'
+# Fetch Database URL from environment or paste your Neon connection string
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://neondb_owner:npg_B9x8LFtZqMHh@ep-long-voice-azn7jllb.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require",
+)
 
-# Ensure data directory exists
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+if DATABASE_URL.startswith("postgres://"):
+  DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# =====================================================
-# CONNECT
-# =====================================================
-conn = sqlite3.connect(DB_PATH)
+conn = psycopg2.connect(DATABASE_URL)
 cursor = conn.cursor()
 
 try:
-    # =====================================================
-    # CREATE ADMINS TABLE
-    # =====================================================
-    cursor.execute('''
+  # 1. Create Admins Table
+  cursor.execute("""
     CREATE TABLE IF NOT EXISTS admins (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        email VARCHAR(100) UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
-        role TEXT DEFAULT 'HR Manager',
+        role VARCHAR(50) DEFAULT 'HR Manager',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
+    );
+    """)
 
-    # =====================================================
-    # CREATE / UPDATE ADMIN USER
-    # =====================================================
-    NAME = 'Yash Kabure'
-    EMAIL = 'admin@apexhr.com'
-    PASSWORD = 'Yash@2005'
-    password_hash = generate_password_hash(PASSWORD)
+  # 2. Setup Admin Details
+  NAME = "Yash Kabure"
+  EMAIL = "admin@apexhr.com"
+  PASSWORD = "Yash@2005"
+  password_hash = generate_password_hash(PASSWORD)
 
-    # Insert admin if not exists
-    cursor.execute('''
-    INSERT OR IGNORE INTO admins (name, email, password_hash, role)
-    VALUES (?, ?, ?, ?)
-    ''', (
-        NAME,
-        EMAIL,
-        password_hash,
-        'HR Manager'
-    ))
+  # 3. Upsert Admin User
+  cursor.execute(
+      """
+    INSERT INTO admins (name, email, password_hash, role)
+    VALUES (%s, %s, %s, %s)
+    ON CONFLICT (email) DO UPDATE
+    SET password_hash = EXCLUDED.password_hash;
+    """,
+      (NAME, EMAIL, password_hash, "HR Manager"),
+  )
 
-    # Always update password to latest value
-    cursor.execute('''
-    UPDATE admins
-    SET password_hash = ?
-    WHERE email = ?
-    ''', (
-        password_hash,
-        EMAIL
-    ))
+  conn.commit()
 
-    conn.commit()
-    
-    print('✅ Admin table ensured')
-    print('✅ Admin account ensured')
-    print('Email:', EMAIL)
-    print('Password:', PASSWORD)
+  print("✅ Admin table ensured on PostgreSQL")
+  print("✅ Admin account ensured")
+  print("Email:", EMAIL)
 
 finally:
-    conn.close()
+  cursor.close()
+  conn.close()

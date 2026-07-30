@@ -6,14 +6,17 @@ S3. Location: app/services/s3_service.py
 
 import logging
 import os
+import shutil  # Added missing import
 import tempfile
 import zipfile
 from uuid import uuid4
+
 import boto3
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 
+# Initialize boto3 S3 client
 s3 = boto3.client(
     "s3",
     aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
@@ -24,7 +27,8 @@ s3 = boto3.client(
 BUCKET = os.getenv("S3_BUCKET_NAME")
 
 
-def upload_salary_to_s3(file_obj, filename):
+def upload_salary_to_s3(file_obj, filename: str) -> str:
+  """Upload salary slip PDF to S3 under salary_slips/ directory."""
   key = f"salary_slips/{uuid4()}_{filename}"
   s3.upload_fileobj(
       file_obj, BUCKET, key, ExtraArgs={"ContentType": "application/pdf"}
@@ -32,7 +36,8 @@ def upload_salary_to_s3(file_obj, filename):
   return key
 
 
-def upload_video_to_s3(file_obj, filename):
+def upload_video_to_s3(file_obj, filename: str) -> str:
+  """Upload training video MP4 to S3 under training_videos/ directory."""
   key = f"training_videos/{uuid4()}_{filename}"
   s3.upload_fileobj(
       file_obj, BUCKET, key, ExtraArgs={"ContentType": "video/mp4"}
@@ -55,7 +60,7 @@ def upload_policy_to_s3(file_obj, filename: str) -> str:
 
 
 def generate_presigned_url(s3_key: str, expires: int = 3600) -> str:
-  """Generate pre-signed URL for viewing/downloading PDFs securely."""
+  """Generate pre-signed URL for viewing/downloading files securely."""
   try:
     return s3.generate_presigned_url(
         "get_object",
@@ -127,7 +132,9 @@ def sync_faiss_from_s3() -> bool:
         shutil.rmtree(nested_path)
 
       # Clean up the downloaded zip file
-      os.remove(zip_filename)
+      if os.path.exists(zip_filename):
+        os.remove(zip_filename)
+
       logger.info(
           "SYNC_FAISS_SUCCESS ✅ | FAISS vector index loaded successfully!"
       )

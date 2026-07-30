@@ -1,0 +1,142 @@
+[
+  {
+    "id": 1,
+    "question": "What are the standard working hours at TechNova Solutions?",
+    "ground_truth": "The standard working hours are Monday to Friday, 9:30 AM to 6:30 PM, totaling 8 working hours with a 1-hour lunch break.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Working Hours Policy"
+  },
+  {
+    "id": 2,
+    "question": "How long is the probation period for new employees?",
+    "ground_truth": "The standard probation period is six months.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Probation Policy"
+  },
+  {
+    "id": 3,
+    "question": "How many Casual Leave days are employees entitled to annually?",
+    "ground_truth": "Employees are entitled to 12 Casual Leave days per calendar year.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Leave Policy Overview"
+  },
+  {
+    "id": 4,
+    "question": "How many Sick Leave days are available each year?",
+    "ground_truth": "Employees receive 10 Sick Leave days annually.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Leave Policy Overview"
+  },
+  {
+    "id": 5,
+    "question": "How many Earned Leave days are granted each year?",
+    "ground_truth": "Employees receive 18 Earned Leave days annually.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Leave Policy Overview"
+  },
+  {
+    "id": 6,
+    "question": "When is salary credited?",
+    "ground_truth": "Salary is generally credited on the last working day of every month.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Salary Payment"
+  },
+  {
+    "id": 7,
+    "question": "What documents must a new employee submit during joining?",
+    "ground_truth": "Employees must submit Aadhaar Card, PAN Card, educational certificates, bank details, address proof, photographs, previous employment documents and other required documents.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Joining Formalities"
+  },
+  {
+    "id": 8,
+    "question": "Can employees install any software on company laptops?",
+    "ground_truth": "No. Only software approved by the IT Department may be installed.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Software Installation Policy"
+  },
+  {
+    "id": 9,
+    "question": "How often should passwords be changed?",
+    "ground_truth": "Passwords should be changed every 90 days or immediately if compromise is suspected.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Password Policy"
+  },
+  {
+    "id": 10,
+    "question": "Is Multi-Factor Authentication mandatory?",
+    "ground_truth": "Yes. MFA is mandatory for email, VPN, cloud services, HRMS, financial systems, development platforms and source code repositories.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Multi-Factor Authentication"
+  },
+  {
+    "id": 11,
+    "question": "What happens after three late arrivals in one month?",
+    "ground_truth": "Three late entries in one calendar month are converted into one half-day leave.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Late Coming Policy"
+  },
+  {
+    "id": 12,
+    "question": "Can employees work remotely?",
+    "ground_truth": "Yes. Eligible employees may work remotely subject to manager approval, project requirements and compliance with the Work From Home policy.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Work From Home Summary"
+  },
+  {
+    "id": 13,
+    "question": "What is the maternity leave entitlement?",
+    "ground_truth": "Eligible female employees receive 26 weeks of maternity leave.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Leave Policy Overview"
+  },
+  {
+    "id": 14,
+    "question": "How many days of paternity leave are provided?",
+    "ground_truth": "Eligible male employees receive 10 working days of paternity leave.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Leave Policy Overview"
+  },
+  {
+    "id": 15,
+    "question": "What should an employee do after receiving a suspicious email?",
+    "ground_truth": "Employees should report suspicious emails immediately to the IT Security Team.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Cybersecurity Awareness"
+  },
+  {
+    "id": 16,
+    "question": "What are the five performance ratings?",
+    "ground_truth": "Outstanding, Exceeds Expectations, Meets Expectations, Needs Improvement and Unsatisfactory.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Performance Rating Scale"
+  },
+  {
+    "id": 17,
+    "question": "What is a Performance Improvement Plan (PIP)?",
+    "ground_truth": "A Performance Improvement Plan is a structured plan for employees whose performance does not meet expectations, typically lasting 30 to 90 days with measurable improvement goals.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Performance Improvement Plan"
+  },
+  {
+    "id": 18,
+    "question": "What is the notice period for permanent employees?",
+    "ground_truth": "The standard notice period for permanent employees is 60 days.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Notice Period"
+  },
+  {
+    "id": 19,
+    "question": "What company assets must be returned during exit?",
+    "ground_truth": "Employees must return laptops, ID cards, access cards, mobile phones, monitors, security tokens, documents and other company assets before separation.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Return of Company Assets"
+  },
+  {
+    "id": 20,
+    "question": "Who can employees contact to report workplace grievances?",
+    "ground_truth": "Employees may contact their reporting manager, Department Head, Human Resources or the Ethics Committee depending on the nature of the grievance.",
+    "source_document": "Employee_Handbook.pdf",
+    "expected_section": "Grievance Redressal Policy"
+  }
+]

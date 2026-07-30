@@ -7,11 +7,14 @@ Model Rate Limit Fallbacks. Location: app/services/rag_service.py
 import logging
 import os
 import re
-from app.services.whatsapp_service import send_text
+
 from langchain_community.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from rank_bm25 import BM25Okapi
+
 from app.services.memory_service import add_to_chat_history, get_chat_history
+from app.services.whatsapp_service import send_text
+
 logger = logging.getLogger(__name__)
 
 # Global index references cached in RAM
@@ -104,10 +107,7 @@ def hybrid_retrieve(
 def math_rrf_rerank(
     faiss_chunks: list, bm25_chunks: list, top_k: int = 2
 ) -> tuple[str, str, list]:
-  """Reranks candidate chunks mathematically using Reciprocal Rank Fusion (RRF).
-
-  Consumes 0 API calls and 0 MB RAM.
-  """
+  """Reranks candidate chunks mathematically using Reciprocal Rank Fusion (RRF)."""
   if not faiss_chunks and not bm25_chunks:
     return "", "", []
 
@@ -195,8 +195,6 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
   )
 
   return fallback_text, citation_footer
-
-
 
 
 def handle_rag_query(employee, query: str, collection_unused, gemini_client):

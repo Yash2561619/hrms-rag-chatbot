@@ -158,17 +158,22 @@
 
                         <hr class="text-muted opacity-25 my-2">
 
+                        <!-- Icon-only action buttons -->
                         <div class="d-flex justify-content-end gap-2 mt-3">
                             <a href="{{ url_for('admin.view_salary_route', id=slip.id if slip.id is defined else slip[0]) }}"
                                target="_blank"
-                               class="btn btn-outline-primary btn-sm px-3 rounded-2 fw-medium">
-                                <i class="bi bi-eye-fill me-1"></i> View
+                               class="btn btn-outline-primary rounded-circle p-2 d-inline-flex align-items-center justify-content-center"
+                               style="width: 38px; height: 38px;"
+                               title="View Salary Slip">
+                                <i class="bi bi-eye-fill fs-6"></i>
                             </a>
 
                             <a href="{{ url_for('admin.delete_salary_route', id=slip.id if slip.id is defined else slip[0]) }}"
                                onclick="return confirm('Delete this salary slip?')"
-                               class="btn btn-outline-danger btn-sm px-3 rounded-2 fw-medium">
-                                <i class="bi bi-trash-fill me-1"></i> Delete
+                               class="btn btn-outline-danger rounded-circle p-2 d-inline-flex align-items-center justify-content-center"
+                               style="width: 38px; height: 38px;"
+                               title="Delete Salary Slip">
+                                <i class="bi bi-trash-fill fs-6"></i>
                             </a>
                         </div>
 

@@ -17,6 +17,9 @@ from werkzeug.utils import secure_filename
 from database import (  # ... your other imports ...,
     delete_policy_file,
 )
+from database import (  # ... your existing imports ...,
+    delete_training_video,
+)
 from app.services.auth_service import authenticate_admin
 from app.services.s3_service import (
     delete_file_from_s3,
@@ -961,3 +964,24 @@ def upload_video():
   videos = get_all_training_videos()
 
   return render_template("upload_video.html", videos=videos)
+
+
+@admin_bp.route("/delete-video/<int:id>", methods=["GET", "POST"])
+@login_required
+def delete_video(id):
+  """Delete video from S3 and database."""
+  try:
+    s3_key = delete_training_video(id)
+
+    if s3_key:
+      delete_file_from_s3(s3_key)
+      log_activity(f"🗑️ Deleted training video [ID: {id}]")
+      flash("✅ Training video deleted successfully!", "success")
+    else:
+      flash("❌ Video not found.", "danger")
+
+  except Exception as e:
+    logger.error(f"DELETE_VIDEO_ERROR | id={id} | error={e}")
+    flash("❌ Failed to delete video.", "danger")
+
+  return redirect(url_for("admin.upload_video"))

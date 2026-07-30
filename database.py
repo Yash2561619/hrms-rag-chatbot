@@ -938,3 +938,35 @@ def delete_policy_file(filename):
   finally:
     cursor.close()
     conn.close()
+
+
+def delete_training_video(video_id):
+  """Deletes a training video record from PostgreSQL and returns its S3 key."""
+  conn = get_connection()
+  cursor = conn.cursor()
+
+  try:
+    # 1. Fetch S3 key first
+    cursor.execute(
+        "SELECT s3_key FROM training_videos WHERE id = %s", (video_id,)
+    )
+    row = cursor.fetchone()
+
+    if not row:
+      return None
+
+    s3_key = row[0]
+
+    # 2. Delete record
+    cursor.execute("DELETE FROM training_videos WHERE id = %s", (video_id,))
+    conn.commit()
+    logging.info(f"DB_VIDEO_DELETED | id={video_id}")
+    return s3_key
+
+  except Exception as e:
+    logging.error(f"DB_VIDEO_DELETE_ERROR | id={video_id} | error={e}")
+    conn.rollback()
+    raise e
+  finally:
+    cursor.close()
+    conn.close()

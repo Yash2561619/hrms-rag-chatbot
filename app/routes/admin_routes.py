@@ -14,7 +14,9 @@ from flask import (
     url_for,
 )
 from werkzeug.utils import secure_filename
-
+from database import (  # ... your other imports ...,
+    delete_policy_file,
+)
 from app.services.auth_service import authenticate_admin
 from app.services.s3_service import (
     delete_file_from_s3,
@@ -807,11 +809,17 @@ def policy_management():
 @admin_bp.route("/delete-policy/<path:filename>", methods=["GET", "POST"])
 @login_required
 def delete_policy(filename):
-  """Delete policy file from S3 and update tracking registry."""
+  """Delete policy file from S3, database, and update tracking registry."""
   try:
+    # 1. Delete PDF from S3 bucket
     s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=f"policies/{filename}")
     logger.info(f"S3_DELETED | file={filename}")
 
+    # 2. Delete metadata record from PostgreSQL database (NEW)
+    delete_policy_file(filename)
+    logger.info(f"DB_DELETED | file={filename}")
+
+    # 3. Remove entry from local PDF registry JSON if available
     try:
       registry = load_pdf_registry()
       if filename in registry:
@@ -823,16 +831,18 @@ def delete_policy(filename):
           f"REGISTRY_UPDATE_SKIPPED | file={filename} | error={e}"
       )
 
+    log_activity(f"🗑️ Deleted policy: {filename}")
     flash(
-        f"Successfully deleted {filename}. Run Colab indexer to update FAISS.",
+        f"✅ Successfully deleted {filename} from S3 and database. Run Colab"
+        " indexer to update FAISS.",
         "success",
     )
+
   except Exception as e:
     logger.error(f"DELETE_FAILED | file={filename} | error={e}")
-    flash(f"Failed to delete {filename}: {str(e)}", "danger")
+    flash(f"❌ Failed to delete {filename}: {str(e)}", "danger")
 
   return redirect(url_for("admin.policy_management"))
-
 
 @admin_bp.route("/download-policy/<filename>")
 @login_required

@@ -913,3 +913,28 @@ def get_all_policy_files():
   rows = [dict(row) for row in cursor.fetchall()]
   conn.close()
   return rows
+
+
+
+def delete_policy_file(filename):
+  """Deletes policy metadata record from PostgreSQL database."""
+  conn = get_connection()
+  cursor = conn.cursor()
+
+  try:
+    cursor.execute(
+        """
+            DELETE FROM policy_files
+            WHERE file_name = %s
+        """,
+        (filename,),
+    )
+    conn.commit()
+    logging.info(f"DB_POLICY_DELETED | file={filename}")
+  except Exception as e:
+    logging.error(f"DB_POLICY_DELETE_ERROR | file={filename} | error={e}")
+    conn.rollback()
+    raise e
+  finally:
+    cursor.close()
+    conn.close()

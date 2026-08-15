@@ -8,6 +8,7 @@ Location: app/services/rag_service.py
 import logging
 import os
 import re
+from google.genai import types
 from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 from langchain_community.vectorstores import FAISS
 from rank_bm25 import BM25Okapi
@@ -29,7 +30,6 @@ def load_indexes():
 
   if faiss_store is None:
     try:
-      # Ultra-lightweight ONNX runtime (matches all-MiniLM-L6-v2 vectors)
       embeddings = FastEmbedEmbeddings(
           model_name="sentence-transformers/all-MiniLM-L6-v2"
       )
@@ -50,6 +50,7 @@ def load_indexes():
     except Exception as e:
       logger.error(f"LOAD_INDEXES_ERROR | {e}")
 
+
 def multi_query_expansion(query: str, gemini_client) -> list[str]:
   """Generates 2 query variations to improve search recall."""
   prompt = f"""
@@ -61,7 +62,11 @@ Output format: Return ONLY the queries separated by newlines, no bullet points o
     res = gemini_client.models.generate_content(
         model="gemini-2.5-flash",
         contents=prompt,
-        config={"temperature": 0.2, "max_output_tokens": 100},
+        config=types.GenerateContentConfig(
+            temperature=0.2,
+            max_output_tokens=100,
+            tools=[],
+        ),
     )
     variations = [
         q.strip() for q in res.text.strip().split("\n") if q.strip()
@@ -84,7 +89,7 @@ def hybrid_retrieve(
   sparse_docs = []
 
   for q in queries:
-    # 1. FAISS Dense Retrieval (HuggingFace)
+    # 1. FAISS Dense Retrieval
     d_docs = faiss_store.similarity_search(q, k=top_k)
     dense_docs.extend(d_docs)
 
@@ -98,12 +103,11 @@ def hybrid_retrieve(
     sparse_docs.extend(s_docs)
 
   all_retrieved = dense_docs + sparse_docs
-
   return dense_docs, sparse_docs, all_retrieved
 
 
 def math_rrf_rerank(
-    faiss_chunks: list, bm25_chunks: list, top_k: int = 2
+    faiss_chunks: list, bm25_chunks: list, top_k: int = 4
 ) -> tuple[str, str, list]:
   """Reranks candidate chunks mathematically using Reciprocal Rank Fusion (RRF)."""
   if not faiss_chunks and not bm25_chunks:
@@ -139,8 +143,9 @@ def math_rrf_rerank(
     source_file = doc.metadata.get("source", "")
     page_num = doc.metadata.get("page", "")
     if source_file:
+      clean_name = os.path.basename(source_file)
       page_text = f" (Page {page_num})" if page_num else ""
-      sources_set.add(f"📄 *{source_file}*{page_text}")
+      sources_set.add(f"📄 *{clean_name}*{page_text}")
 
   citation_footer = (
       "\n\n_Source: " + ", ".join(sources_set) + "_" if sources_set else ""
@@ -161,13 +166,13 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
   seen = set()
   sources_set = set()
 
-  for doc in chunks[:3]:
-    # Extract sources for fallback citation
+  for doc in chunks[:4]:
     source_file = doc.metadata.get("source", "")
     page_num = doc.metadata.get("page", "")
     if source_file:
+      clean_name = os.path.basename(source_file)
       page_text = f" (Page {page_num})" if page_num else ""
-      sources_set.add(f"📄 *{source_file}*{page_text}")
+      sources_set.add(f"📄 *{clean_name}*{page_text}")
 
     text = re.sub(r"\s+", " ", doc.page_content).strip()
 
@@ -176,9 +181,9 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
       if len(sentence) > 25 and sentence.lower() not in seen:
         seen.add(sentence.lower())
         clean_sentences.append(sentence)
-        if len(clean_sentences) >= 4:
+        if len(clean_sentences) >= 5:
           break
-    if len(clean_sentences) >= 4:
+    if len(clean_sentences) >= 5:
       break
 
   bullet_points = "\n".join([f"• {s}." for s in clean_sentences])
@@ -219,25 +224,30 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
       )
       return
 
-    # 3. Math RRF Re-ranking
+    # 3. Math RRF Re-ranking (retrieve top 3-4 chunks for full context)
     context, citation_footer, top_docs = math_rrf_rerank(
-        dense_docs, sparse_docs, top_k=2
+        dense_docs, sparse_docs, top_k=3
     )
 
-    # 4. Context-Aware Prompt with Memory
-    prompt = f"""
-Answer the employee question concisely and professionally using ONLY the provided HR Policy Context.
-Use the Conversation History to resolve follow-up pronouns like "it", "that policy", "this", or "them".
+    # 4. Context-Aware Prompt
+    prompt = f"""You are an expert HR Assistant. Answer the employee's query completely, concisely, and accurately based ONLY on the provided HR Policy Context.
 
+Rules:
+1. Provide a clear, bulleted or structured summary covering eligibility, approvals, and key rules.
+2. Complete all sentences. Do not truncate.
+3. If the context does not contain the answer, say: "The requested details are not covered in the current HR policy documents."
+
+---
 Conversation History:
 {chat_history_str}
-
+---
 HR Policy Context:
 {context}
-
-Current Question:
+---
+Employee Question:
 {query}
-"""
+
+Answer:"""
 
     response_text = None
 
@@ -246,7 +256,11 @@ Current Question:
       response = gemini_client.models.generate_content(
           model="gemini-2.5-flash",
           contents=prompt,
-          config={"temperature": 0.2, "max_output_tokens": 300},
+          config=types.GenerateContentConfig(
+              temperature=0.2,
+              max_output_tokens=800,
+              tools=[],
+          ),
       )
       if response and response.text:
         response_text = response.text.strip()
@@ -257,11 +271,11 @@ Current Question:
     if not response_text:
       response_text, citation_footer = format_raw_chunks_fallback(all_retrieved)
 
-    # 6. Save successful interaction to Upstash Redis Memory
+    # 6. Save successful interaction to Memory
     if response_text:
       add_to_chat_history(employee_id, query, response_text)
 
-    # 7. Send WhatsApp response
+    # 7. Send complete WhatsApp response
     final_whatsapp_msg = f"{response_text}{citation_footer}"
     send_text(sender, final_whatsapp_msg)
     logger.info(f"RAG_QUERY_SUCCESS | user={employee_id}")

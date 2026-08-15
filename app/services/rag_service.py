@@ -1,7 +1,8 @@
 """Advanced RAG Service for HR Policy Queries.
 
 Includes Query Expansion, Hybrid FAISS + BM25 Search, Math RRF Re-Ranking, and
-Model Rate Limit Fallbacks. Location: app/services/rag_service.py
+Model Rate Limit Fallbacks using HuggingFace all-MiniLM-L6-v2 Embeddings.
+Location: app/services/rag_service.py
 """
 
 import logging
@@ -9,7 +10,7 @@ import os
 import re
 
 from langchain_community.vectorstores import FAISS
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from rank_bm25 import BM25Okapi
 
 from app.services.memory_service import add_to_chat_history, get_chat_history
@@ -24,14 +25,16 @@ all_docs = []
 
 
 def load_indexes():
-  """Lazy-loads FAISS and builds BM25 index in RAM on boot (~15 MB RAM total)."""
+  """Lazy-loads FAISS using local HuggingFace embeddings and builds BM25 index."""
   global faiss_store, bm25_index, all_docs
 
   if faiss_store is None:
     try:
-      api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-      embeddings = GoogleGenerativeAIEmbeddings(
-          model="models/gemini-embedding-001", google_api_key=api_key
+      # Free, local, lightweight embedding model (matches Google Colab indexer)
+      embeddings = HuggingFaceEmbeddings(
+          model_name="sentence-transformers/all-MiniLM-L6-v2",
+          model_kwargs={"device": "cpu"},
+          encode_kwargs={"normalize_embeddings": True},
       )
 
       if os.path.exists("faiss_index"):
@@ -45,7 +48,9 @@ def load_indexes():
             doc.page_content.lower().split() for doc in all_docs
         ]
         bm25_index = BM25Okapi(tokenized_corpus)
-        logger.info("HYBRID_SEARCH_INDEXES_LOADED_SUCCESSFULLY ✅")
+        logger.info(
+            "HYBRID_SEARCH_INDEXES_LOADED_SUCCESSFULLY (HuggingFace + BM25) ✅"
+        )
       else:
         logger.error("FAISS index directory 'faiss_index' not found!")
     except Exception as e:
@@ -86,7 +91,7 @@ def hybrid_retrieve(
   sparse_docs = []
 
   for q in queries:
-    # 1. FAISS Dense Retrieval
+    # 1. FAISS Dense Retrieval (HuggingFace)
     d_docs = faiss_store.similarity_search(q, k=top_k)
     dense_docs.extend(d_docs)
 
@@ -126,7 +131,7 @@ def math_rrf_rerank(
     chunk_map[doc_id] = doc
     rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (60 + rank))
 
-  # Sort chunks by highest RRF math score
+  # Sort chunks by highest RRF score
   sorted_docs = sorted(
       rrf_scores.items(), key=lambda item: item[1], reverse=True
   )
@@ -198,6 +203,7 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
 
 
 def handle_rag_query(employee, query: str, collection_unused, gemini_client):
+  """Handles end-to-end RAG query flow with multi-turn memory and LLM response."""
   sender = employee["whatsapp"]
   employee_id = employee.get("employee_id")
   logger.info(f"RAG_QUERY_START | user={employee_id}")

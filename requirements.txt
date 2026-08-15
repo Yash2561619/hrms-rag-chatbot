@@ -11,10 +11,15 @@ langchain-community>=0.3.0
 langchain-google-genai>=2.0.0
 langchain-text-splitters>=0.3.0
 
+# Hugging Face Embeddings (Local & Free)
+sentence-transformers>=3.0.0
+langchain-huggingface>=0.1.0
+
 # Google AI & AWS S3
 google-genai>=0.1.0
 boto3>=1.34.0
 dateparser>=1.2.0
+
 # Document Processing
 pdfplumber>=0.10.0
 pypdf>=4.0.0

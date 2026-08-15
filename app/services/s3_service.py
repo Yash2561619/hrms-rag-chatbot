@@ -59,17 +59,17 @@ def upload_policy_to_s3(file_obj, filename: str) -> str:
   return s3_key
 
 
-def generate_presigned_url(s3_key: str, expires: int = 3600) -> str:
-  """Generate pre-signed URL for viewing/downloading files securely."""
-  try:
-    return s3.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": BUCKET, "Key": s3_key},
-        ExpiresIn=expires,
-    )
-  except ClientError as e:
-    logger.error(f"PRESIGNED_URL_ERROR | key={s3_key} | error={e}")
-    return ""
+def generate_presigned_url(s3_key: str, expiration: int = 3600) -> str:
+    """Generate pre-signed URL for viewing/downloading files securely."""
+    try:
+        return s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": BUCKET, "Key": s3_key},
+            ExpiresIn=expiration,
+        )
+    except ClientError as e:
+        logger.error(f"PRESIGNED_URL_ERROR | key={s3_key} | error={e}")
+        return ""
 
 
 generate_download_url = generate_presigned_url

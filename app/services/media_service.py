@@ -207,7 +207,7 @@ _Example:_ `{example_password}`"""
     # 5. Deliver document (Generate presigned URL for S3 or use local file path)
     if path.startswith("salary_slips/"):
       logger.info(f"S3_SALARY_PATH | user={employee_id} | key={path}")
-      presigned_url = generate_presigned_url(path, expiration=900)
+      presigned_url = generate_presigned_url(path)
       if not presigned_url:
         send_text(
             sender,

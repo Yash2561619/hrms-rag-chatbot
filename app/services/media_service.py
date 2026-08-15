@@ -237,3 +237,45 @@ _Example:_ `{example_password}`"""
     send_text(
         sender, "⚠️ Error fetching salary slip. Please try again later."
     )
+
+
+def handle_greeting(employee: dict):
+    """Sends an introduction and interactive menu when an employee greets the bot."""
+    sender = employee["whatsapp"]
+    name = employee.get("name", "there").split()[0]  # First name
+
+    welcome_message = f"""👋 *Hello {name}!*
+
+I am your **AI HR Assistant**. I'm here to help you manage your workplace requests and answer HR policy questions instantly.
+
+---
+
+📌 *Here is what I can do for you:*
+
+1️⃣ *Apply for Leave*
+   • e.g., _"I need leave from 20\u200b-08\u200b-2026 to 22\u200b-08\u200b-2026 for personal work"_
+
+2️⃣ *Check Leave Balance*
+   • e.g., _"What is my leave balance?"_
+
+3️⃣ *Check Leave History*
+   • e.g., _"Show my leave history"_
+
+4️⃣ *Get Salary Slips*
+   • e.g., _"Give my latest salary slip"_ or _"Send June salary slip"_
+
+5️⃣ *Training & Induction Videos*
+   • e.g., _"Send training video"_ or _"Show health insurance video"_
+
+6️⃣ *HR & Company Policy Q&A*
+   • e.g., _"What is the standard probation period?"_
+   • e.g., _"What is the travel reimbursement policy?"_
+
+---
+
+💬 *How can I help you today?*"""
+
+    send_text(sender, welcome_message)
+    logger.info(
+        f"GREETING_SENT | user={employee.get('employee_id')} | name={name}"
+    )

@@ -21,37 +21,39 @@ api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 gemini_client = genai.Client(api_key=api_key)
 
 
-def load_benchmark_dataset(file_path="eval/benchmark_dataset.json"):
-  """Loads the 20-item benchmark test dataset."""
-  with open(file_path, "r", encoding="utf-8") as f:
-    return json.load(f)
+def load_benchmark_dataset(file_path="eval/benchmark_data.json"):
+    """Loads the benchmark test dataset."""
+    if not os.path.exists(file_path):
+        # Fallback to local root if called directly from scripts folder
+        file_path = os.path.join(os.path.dirname(__file__), "..", "eval", "benchmark_data.json")
+    
+    with open(file_path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def evaluate_retrieval(top_docs, expected_document, expected_section=None):
-  """Tier 1: Evaluates Search Retrieval (Hit Rate & MRR)."""
-  hit = 0
-  mrr = 0.0
+    """Tier 1: Evaluates Search Retrieval (Hit Rate & MRR)."""
+    hit = 0
+    mrr = 0.0
 
-  for rank, doc in enumerate(top_docs, start=1):
-    source = doc.metadata.get("source", "")
-    content = doc.page_content.lower()
+    for rank, doc in enumerate(top_docs, start=1):
+        source = doc.metadata.get("source", doc.metadata.get("file_name", ""))
+        content = doc.page_content.lower()
 
-    # Check if the document source matches
-    if expected_document.lower() in source.lower():
-      # Check section match in page content if section specified
-      if expected_section is None or expected_section.lower() in content:
-        hit = 1
-        mrr = 1.0 / rank
-        break
+        # Check if the document source matches
+        if expected_document.lower() in source.lower() or expected_document.lower() in content:
+            # Check section match in page content if section specified
+            if expected_section is None or expected_section.lower() in content:
+                hit = 1
+                mrr = 1.0 / rank
+                break
 
-  return hit, mrr
+    return hit, mrr
 
 
-def evaluate_generation_with_llm_judge(
-    question, retrieved_context, generated_answer, ground_truth
-):
-  """Tier 2: Evaluates LLM Generation Quality (Faithfulness & Answer Relevancy)."""
-  judge_prompt = f"""
+def evaluate_generation_with_llm_judge(question, retrieved_context, generated_answer, ground_truth):
+    """Tier 2: Evaluates LLM Generation Quality (Faithfulness & Answer Relevancy)."""
+    judge_prompt = f"""
 You are an impartial AI evaluator scoring a RAG system's response on a scale from 0.0 to 1.0.
 
 Question: {question}
@@ -66,98 +68,92 @@ Return ONLY a JSON object matching this schema:
   "reasoning": "<short sentence explaining scores>"
 }}
 """
-  try:
-    res = gemini_client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=judge_prompt,
-        config={
-            "temperature": 0.0,
-            "response_mime_type": "application/json",
-        },
-    )
-    return json.loads(res.text)
-  except Exception as e:
-    logger.error(f"EVAL_LLM_JUDGE_ERROR | {e}")
-    return {"faithfulness_score": 0.0, "relevancy_score": 0.0, "reasoning": str(e)}
+    try:
+        res = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=judge_prompt,
+            config={
+                "temperature": 0.0,
+                "response_mime_type": "application/json",
+            },
+        )
+        return json.loads(res.text)
+    except Exception as e:
+        logger.error(f"EVAL_LLM_JUDGE_ERROR | {e}")
+        return {"faithfulness_score": 0.0, "relevancy_score": 0.0, "reasoning": str(e)}
 
 
 def run_full_evaluation():
-  dataset = load_benchmark_dataset()
-  print(
-      f"\n🚀 STARTING TECHNOVA RAG EVALUATION MATRIX ({len(dataset)} Test"
-      " Cases)...\n"
-  )
+    dataset = load_benchmark_dataset()
+    num_items = len(dataset)
+    print(f"\n🚀 STARTING RAG EVALUATION MATRIX ({num_items} Test Cases)...\n")
 
-  total_hits = 0
-  total_mrr = 0.0
-  total_faithfulness = 0.0
-  total_relevancy = 0.0
+    total_hits = 0
+    total_mrr = 0.0
+    total_faithfulness = 0.0
+    total_relevancy = 0.0
 
-  for item in dataset:
-    q_id = item["id"]
-    q = item["question"]
-    ground_truth = item["ground_truth"]
-    expected_doc = item["source_document"]
-    expected_sec = item.get("expected_section")
+    for item in dataset:
+        q_id = item.get("id", 1)
+        q = item["question"]
+        ground_truth = item["ground_truth"]
+        expected_doc = item.get("source_document", "")
+        expected_sec = item.get("expected_section")
 
-    print(f"------------ Test Case #{q_id} ------------")
-    print(f"❓ Question: {q}")
+        print(f"------------ Test Case #{q_id} ------------")
+        print(f"❓ Question: {q}")
 
-    # 1. Step 1: Query Expansion & Retrieval
-    expanded_queries = multi_query_expansion(q, gemini_client)
-    dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(
-        expanded_queries, top_k=6
-    )
+        # 1. Step 1: Query Expansion & Retrieval
+        expanded_queries = multi_query_expansion(q, gemini_client)
+        dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(expanded_queries, top_k=6)
 
-    # 2. Step 2: Math RRF Re-ranking
-    context, citation_footer, top_docs = math_rrf_rerank(
-        dense_docs, sparse_docs, top_k=2
-    )
+        # 2. Step 2: Math RRF Re-ranking
+        context, citation_footer, top_docs = math_rrf_rerank(dense_docs, sparse_docs, top_k=2)
 
-    # 3. Evaluate Tier 1: Search Retrieval Performance
-    hit, mrr = evaluate_retrieval(top_docs, expected_doc, expected_sec)
-    total_hits += hit
-    total_mrr += mrr
-    print(f"🎯 Retrieval -> Hit: {hit} | MRR: {mrr:.2f}")
+        # 3. Evaluate Tier 1: Search Retrieval Performance
+        hit, mrr = evaluate_retrieval(top_docs, expected_doc, expected_sec)
+        total_hits += hit
+        total_mrr += mrr
+        print(f"🎯 Retrieval -> Hit: {hit} | MRR: {mrr:.2f}")
 
-    # 4. Generate Answer via Gemini
-    prompt = f"Answer concisely using ONLY context:\nContext:\n{context}\n\nQuestion:\n{q}"
-    try:
-      resp = gemini_client.models.generate_content(
-          model="gemini-2.5-flash",
-          contents=prompt,
-          config={"temperature": 0.2, "max_output_tokens": 200},
-      )
-      generated_answer = resp.text.strip() if resp and resp.text else ""
-    except Exception as e:
-      generated_answer = ""
+        # 4. Generate Answer via Gemini
+        prompt = f"""You are an HR Assistant. Answer the question concisely using ONLY the provided context. If not found in context, state 'Information not available in policy'.
 
-    # 5. Evaluate Tier 2: LLM Quality Scores
-    scores = evaluate_generation_with_llm_judge(
-        q, context, generated_answer, ground_truth
-    )
-    total_faithfulness += scores["faithfulness_score"]
-    total_relevancy += scores["relevancy_score"]
+Context:
+{context}
 
-    print(f"🤖 Answer: {generated_answer}")
-    print(
-        f"📊 Scores  -> Faithfulness: {scores['faithfulness_score']} |"
-        f" Relevancy: {scores['relevancy_score']}"
-    )
-    print(f"💡 Notes   -> {scores['reasoning']}\n")
+Question:
+{q}"""
+        try:
+            resp = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config={"temperature": 0.1, "max_output_tokens": 200},
+            )
+            generated_answer = resp.text.strip() if resp and resp.text else ""
+        except Exception as e:
+            generated_answer = ""
 
-  # Print Final Evaluation Table
-  num_items = len(dataset)
-  print("==================================================")
-  print("         📈 TECHNOVA EVALUATION MATRIX RESULTS     ")
-  print("==================================================")
-  print(f"  • Total Test Cases:         {num_items}")
-  print(f"  • Hit Rate @ 2:             {total_hits / num_items:.2%}")
-  print(f"  • Mean Reciprocal Rank:     {total_mrr / num_items:.2f}")
-  print(f"  • Average Faithfulness:     {total_faithfulness / num_items:.2f} / 1.0")
-  print(f"  • Average Answer Relevancy: {total_relevancy / num_items:.2f} / 1.0")
-  print("==================================================\n")
+        # 5. Evaluate Tier 2: LLM Quality Scores
+        scores = evaluate_generation_with_llm_judge(q, context, generated_answer, ground_truth)
+        total_faithfulness += scores.get("faithfulness_score", 0.0)
+        total_relevancy += scores.get("relevancy_score", 0.0)
+
+        print(f"🤖 Answer: {generated_answer}")
+        print(f"📊 Scores  -> Faithfulness: {scores.get('faithfulness_score', 0.0)} | Relevancy: {scores.get('relevancy_score', 0.0)}")
+        print(f"💡 Notes   -> {scores.get('reasoning', '')}\n")
+
+    # Print Final Evaluation Table
+    print("==================================================")
+    print("         📈 RAG EVALUATION MATRIX RESULTS         ")
+    print("==================================================")
+    print(f"  • Total Test Cases:         {num_items}")
+    print(f"  • Hit Rate @ 2:             {total_hits / num_items:.2%}")
+    print(f"  • Mean Reciprocal Rank:     {total_mrr / num_items:.2f}")
+    print(f"  • Average Faithfulness:     {total_faithfulness / num_items:.2f} / 1.0")
+    print(f"  • Average Answer Relevancy: {total_relevancy / num_items:.2f} / 1.0")
+    print("==================================================\n")
 
 
 if __name__ == "__main__":
-  run_full_evaluation()
+    run_full_evaluation()

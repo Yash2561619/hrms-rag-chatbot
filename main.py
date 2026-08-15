@@ -146,7 +146,7 @@ def router(employee, message):
   if gemini_client is None:
     init_gemini()
 
-  intent = classify_intent(message)
+  intent = classify_intent(message, gemini_client)
   sender = employee["whatsapp"]
 
   logger.info(f"Intent classified: {intent}")
@@ -187,7 +187,10 @@ def router(employee, message):
       continue_leave_conversation(employee, message, gemini_client)
       return
 
-    if intent == "rag":
+    if intent == "greeting":
+      handle_greeting(employee)
+
+    elif intent == "rag":
       handle_rag_query(
           employee,
           message,

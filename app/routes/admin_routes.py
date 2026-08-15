@@ -13,6 +13,10 @@ from flask import (
     session,
     url_for,
 )
+from app.utils.pdf_security import (
+    generate_salary_pdf_password,
+    protect_pdf_with_password,
+)
 from werkzeug.utils import secure_filename
 from database import (  # ... your other imports ...,
     delete_policy_file,
@@ -651,10 +655,9 @@ Status: Rejected ✗
 @admin_bp.route("/upload-salary", methods=["GET", "POST"])
 @login_required
 def upload_salary():
-  """Upload salary slip."""
+  """Upload salary slip with password protection."""
 
   if request.method == "POST":
-
     try:
       employee_id = request.form.get("employee_id", "").strip()
       month = request.form.get("month")
@@ -693,13 +696,39 @@ def upload_salary():
         flash("❌ Only PDF files allowed")
         return redirect(url_for("admin.upload_salary"))
 
-      # Generate filename
+      # Fetch employee using your existing database function
+      employee = get_employee(employee_id)
+      if not employee:
+        flash(f"❌ Employee {employee_id} not found")
+        return redirect(url_for("admin.upload_salary"))
+
+      # Handle whether employee is returned as a dict or a tuple/row
+      if isinstance(employee, dict):
+        emp_id = employee.get("employee_id")
+        phone_num = employee.get("whatsapp") or employee.get("phone")
+      else:
+        # Fallback if returned as tuple: (id, employee_id, name, department, joining_date, whatsapp, ...)
+        emp_id = employee[1]
+        phone_num = employee[5]
+
+      # Generate password (e.g. EMP001@5888)
+      pdf_password = generate_salary_pdf_password(emp_id, phone_num)
+
+      # Encrypt PDF bytes
+      file_bytes = file.read()
+      encrypted_pdf_stream = protect_pdf_with_password(
+          file_bytes, pdf_password
+      )
+
+      # Generate standard filename
       filename = secure_filename(f"{employee_id}_{month}_{year}.pdf")
 
-      # Upload directly to S3
-      s3_key = upload_salary_to_s3(file, filename)
+      # Upload password-protected stream to S3
+      s3_key = upload_salary_to_s3(encrypted_pdf_stream, filename)
 
-      logger.info(f"SALARY_UPLOADED_TO_S3 | key={s3_key}")
+      logger.info(
+          f"SALARY_UPLOADED_TO_S3 | key={s3_key} | password_protected=True"
+      )
 
       # Save S3 key in database
       save_salary_slip(employee_id, month, year, s3_key)
@@ -707,7 +736,7 @@ def upload_salary():
       log_activity(
           f"💰 Salary slip uploaded for {employee_id} ({month}/{year})"
       )
-      flash("✅ Salary slip uploaded successfully!")
+      flash("✅ Password-protected salary slip uploaded successfully!")
 
       return redirect(url_for("admin.upload_salary"))
 
@@ -721,8 +750,6 @@ def upload_salary():
   return render_template(
       "upload_salary.html", employees=employees_list, salary_slips=salary_slips
   )
-
-
 # =====================================================
 # POLICY MANAGEMENT
 # =====================================================
@@ -1022,89 +1049,85 @@ MONTH_MAP = {
 }
 
 
-@admin_bp.route("/bulk-upload-salary", methods=["POST"])
+@admin_bp.route("/upload-bulk-salary", methods=["POST"])
 @login_required
-def bulk_upload_salary():
-  """Extracts a ZIP of salary slips and processes them in bulk."""
-  if "salary_zip" not in request.files:
-    flash("❌ No ZIP file uploaded", "danger")
+def upload_bulk_salary():
+    """Extracts salary PDFs from a ZIP file, encrypts each with a password, and uploads to S3."""
+    if "salary_zip" not in request.files:
+        flash("❌ No ZIP file selected")
+        return redirect(url_for("admin.upload_salary"))
+
+    zip_file = request.files["salary_zip"]
+
+    if not zip_file or zip_file.filename == "":
+        flash("❌ No file selected")
+        return redirect(url_for("admin.upload_salary"))
+
+    if not zip_file.filename.lower().endswith(".zip"):
+        flash("❌ Only .zip files are allowed for bulk upload")
+        return redirect(url_for("admin.upload_salary"))
+
+    success_count = 0
+    skipped_count = 0
+
+    try:
+        # Read the uploaded zip archive into memory
+        with zipfile.ZipFile(io.BytesIO(zip_file.read()), "r") as z:
+            for file_info in z.infolist():
+                filename = os.path.basename(file_info.filename)
+
+                # Skip directories, Mac metadata files, and non-PDFs
+                if not filename.lower().endswith(".pdf") or filename.startswith(".") or file_info.is_dir():
+                    continue
+
+                # Expected standard naming format: EMP001_6_2026.pdf -> [EMP001, 6, 2026]
+                base_name = filename[:-4]  # Remove .pdf
+                parts = base_name.split("_")
+
+                if len(parts) != 3:
+                    logger.warning(f"BULK_UPLOAD_SKIPPED_INVALID_NAME | file={filename}")
+                    skipped_count += 1
+                    continue
+
+                emp_id, month_str, year_str = parts[0].strip(), parts[1].strip(), parts[2].strip()
+
+                try:
+                    month = int(month_str)
+                    year = int(year_str)
+                except ValueError:
+                    logger.warning(f"BULK_UPLOAD_INVALID_DATE_VALUES | file={filename}")
+                    skipped_count += 1
+                    continue
+
+                # 1. Fetch employee to get password details
+                employee = get_employee(emp_id)
+                if not employee:
+                    logger.warning(f"BULK_UPLOAD_EMPLOYEE_NOT_FOUND | employee_id={emp_id}")
+                    skipped_count += 1
+                    continue
+
+                # Handle dict or tuple format
+                phone_num = employee.get("whatsapp") if isinstance(employee, dict) else employee[5]
+
+                # 2. Generate password (e.g. EMP001@5888)
+                pdf_password = generate_salary_pdf_password(emp_id, phone_num)
+
+                # 3. Read raw PDF bytes from ZIP and encrypt
+                raw_pdf_bytes = z.read(file_info.filename)
+                encrypted_pdf_stream = protect_pdf_with_password(raw_pdf_bytes, pdf_password)
+
+                # 4. Upload encrypted stream to S3
+                s3_key = upload_salary_to_s3(encrypted_pdf_stream, filename)
+
+                # 5. Save metadata record in database
+                save_salary_slip(emp_id, month, year, s3_key)
+                success_count += 1
+
+        log_activity(f"📦 Bulk salary upload processed: {success_count} uploaded, {skipped_count} skipped")
+        flash(f"✅ Bulk upload complete! {success_count} slips encrypted & uploaded ({skipped_count} skipped).")
+
+    except Exception as e:
+        logger.exception("BULK_SALARY_UPLOAD_ERROR")
+        flash(f"❌ Failed to process bulk ZIP file: {str(e)}")
+
     return redirect(url_for("admin.upload_salary"))
-
-  file = request.files["salary_zip"]
-
-  if not file or not file.filename.endswith(".zip"):
-    flash("❌ Please upload a valid .zip file containing PDFs", "danger")
-    return redirect(url_for("admin.upload_salary"))
-
-  success_count = 0
-  error_count = 0
-
-  try:
-    with zipfile.ZipFile(file) as z:
-      seen_slips = set()
-      for filename in z.namelist():
-        # Ignore macOS metadata or non-PDF files
-        if filename.startswith("__MACOSX") or not filename.endswith(".pdf"):
-          continue
-
-        clean_filename = os.path.basename(filename)
-        if clean_filename in seen_slips:
-          logger.info(f"SKIPPING_DUPLICATE_IN_ZIP | file={clean_filename}")
-          continue
-
-        seen_slips.add(clean_filename)
-        if not clean_filename:
-          continue
-
-        # Expected Filename Pattern: EMP001_June_2026.pdf or EMP001_6_2026.pdf
-        name_parts = clean_filename.replace(".pdf", "").split("_")
-
-        if len(name_parts) < 3:
-          logger.warning(f"BULK_SALARY_SKIP | Invalid filename: {clean_filename}")
-          error_count += 1
-          continue
-
-        employee_id = name_parts[0].strip()
-        raw_month = name_parts[1].strip().lower()
-        year = int(name_parts[2].strip())
-
-        # Parse month number
-        month_num = (
-            int(raw_month)
-            if raw_month.isdigit()
-            else MONTH_MAP.get(raw_month, 0)
-        )
-
-        if not month_num or month_num < 1 or month_num > 12:
-          error_count += 1
-          continue
-
-        # Extract individual PDF binary from ZIP
-        pdf_bytes = z.read(filename)
-        file_obj = io.BytesIO(pdf_bytes)
-
-        # Generate unique filename & upload to S3
-        formatted_name = secure_filename(
-            f"{employee_id}_{month_num}_{year}.pdf"
-        )
-        s3_key = upload_salary_to_s3(file_obj, formatted_name)
-
-        # Save or Update record in PostgreSQL
-        save_salary_slip(employee_id, month_num, year, s3_key)
-        success_count += 1
-
-    log_activity(
-        f"💰 Bulk salary upload completed: {success_count} succeeded,"
-        f" {error_count} failed"
-    )
-    flash(
-        f"✅ Successfully processed {success_count} salary slips!"
-        + (f" ({error_count} skipped/failed)" if error_count > 0 else ""),
-        "success" if error_count == 0 else "warning",
-    )
-
-  except Exception as e:
-    logger.exception("BULK_SALARY_UPLOAD_ERROR")
-    flash(f"❌ Failed to process bulk ZIP file: {str(e)}", "danger")
-
-  return redirect(url_for("admin.upload_salary"))

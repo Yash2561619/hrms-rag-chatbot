@@ -108,7 +108,14 @@ def handle_training_video(employee, message):
 
 def handle_salary_slip(employee, message):
   sender = employee["whatsapp"]
-  employee_id = employee["employee_id"]
+  employee_id = (
+      employee.get("employee_id")
+      if isinstance(employee, dict)
+      else employee[1]
+  )
+  raw_phone = (
+      employee.get("whatsapp") if isinstance(employee, dict) else employee[5]
+  )
 
   try:
     logger.info(
@@ -160,36 +167,54 @@ def handle_salary_slip(employee, message):
         f" year={year}"
     )
 
-    # Fetch salary slip path from database
+    # 1. Fetch salary slip path from database
     if month:
       path = get_salary_slip_by_month(employee_id, month, year)
     else:
       path = get_latest_salary_slip(employee_id)
 
-    # Not found
+    # 2. Not found handling
     if not path:
       logger.warning(
           f"SALARY_SLIP_NOT_FOUND | user={employee_id} | month={month} |"
           f" year={year}"
       )
-
       if month:
         send_text(sender, f"❌ No salary slip found for {month}.")
       else:
         send_text(sender, "❌ No salary slip found.")
-
       return
 
     logger.info(f"SALARY_SLIP_FOUND | user={employee_id} | file={path}")
 
-    caption = (
-        f"Your {month} salary slip" if month else "Your latest salary slip"
-    )
+    # 3. Build dynamic password example using employee's actual details
+    digits_only = re.sub(r"\D", "", str(raw_phone or ""))
+    last_4_phone = digits_only[-4:] if len(digits_only) >= 4 else "XXXX"
+    example_password = f"{employee_id}@{last_4_phone}"
 
-    # Deliver via S3 or Local relative path
+    # 4. Construct WhatsApp caption with password instructions
+    slip_period = (
+        f"{month} {year}" if (month and year) else (month or "Latest")
+    )
+    caption = f"""📄 *Salary Slip - {slip_period}*
+
+Your password-protected salary slip is attached below.
+
+🔒 *Password to Open:*
+`{employee_id}@<Last 4 digits of your registered mobile number>`
+_Example:_ `{example_password}`"""
+
+    # 5. Deliver document (Generate presigned URL for S3 or use local file path)
     if path.startswith("salary_slips/"):
       logger.info(f"S3_SALARY_PATH | user={employee_id} | key={path}")
-      send_document(sender, path, caption)
+      presigned_url = generate_presigned_url(path, expiration=900)
+      if not presigned_url:
+        send_text(
+            sender,
+            "❌ Unable to generate download link. Please try again later.",
+        )
+        return
+      send_document(sender, presigned_url, caption=caption)
     else:
       final_path = path
       if not final_path.startswith("uploads/"):
@@ -198,7 +223,7 @@ def handle_salary_slip(employee, message):
       logger.info(
           f"LOCAL_SALARY_PATH | user={employee_id} | path={final_path}"
       )
-      send_document(sender, final_path, caption)
+      send_document(sender, final_path, caption=caption)
 
     logger.info(
         f"SALARY_SLIP_SENT | user={employee_id} | month={month} | year={year}"
@@ -209,7 +234,6 @@ def handle_salary_slip(employee, message):
         f"SALARY_SLIP_ERROR | user={employee_id} | error={str(e)}",
         exc_info=True,
     )
-
     send_text(
         sender, "⚠️ Error fetching salary slip. Please try again later."
     )

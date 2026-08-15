@@ -55,23 +55,53 @@ logger = logging.getLogger(__name__)
 
 def send_document(to, file_path, caption):
     """
-    Send document via WhatsApp.
-    Supports both:
-    - AWS S3 keys (salary_slips/...)
-    - Local files (fallback)
+    Send document via WhatsApp Cloud API.
+    Supports:
+    - Pre-signed URLs / HTTP links (https://...)
+    - AWS S3 Keys (salary_slips/...)
+    - Local fallback files
     """
-
     try:
-        # ==========================================
-        # S3 DOCUMENT
-        # ==========================================
-        if file_path.startswith('salary_slips/'):
+        url = f'https://graph.facebook.com/v23.0/{PHONE_NUMBER_ID}/messages'
+        headers = {
+            'Authorization': f'Bearer {WHATSAPP_TOKEN}',
+            'Content-Type': 'application/json'
+        }
 
+        # --------------------------------------------------
+        # 1. ALREADY A PRESIGNED URL / WEB LINK
+        # --------------------------------------------------
+        if file_path.startswith('http://') or file_path.startswith('https://'):
+            # Extract clean filename or set default
+            filename = file_path.split('?')[0].split('/')[-1] or "Salary_Slip.pdf"
+
+            payload = {
+                'messaging_product': 'whatsapp',
+                'to': str(to),
+                'type': 'document',
+                'document': {
+                    'link': file_path,
+                    'caption': caption,
+                    'filename': filename
+                }
+            }
+
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            logger.info(f'WHATSAPP_URL_DOCUMENT_SENT | to={to} | status={response.status_code}')
+
+            if response.status_code != 200:
+                logger.error(f"WHATSAPP_SEND_ERROR | {response.text}")
+            return response.status_code == 200
+
+        # --------------------------------------------------
+        # 2. AWS S3 KEY (salary_slips/...)
+        # --------------------------------------------------
+        elif file_path.startswith('salary_slips/'):
             signed_url = generate_download_url(file_path)
 
             payload = {
                 'messaging_product': 'whatsapp',
-                'to': to,
+                'to': str(to),
                 'type': 'document',
                 'document': {
                     'link': signed_url,
@@ -80,40 +110,56 @@ def send_document(to, file_path, caption):
                 }
             }
 
-            headers = {
-                'Authorization': f'Bearer {WHATSAPP_TOKEN}',
-                'Content-Type': 'application/json'
-            }
-
-            url = f'https://graph.facebook.com/v23.0/{PHONE_NUMBER_ID}/messages'
-
-            response = requests.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=30
-            )
-
-            logger.info(
-                f'WHATSAPP_S3_DOCUMENT_SENT | to={to} | status={response.status_code}'
-            )
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            logger.info(f'WHATSAPP_S3_DOCUMENT_SENT | to={to} | status={response.status_code}')
 
             if response.status_code != 200:
-                logger.error(response.text)
-
+                logger.error(f"WHATSAPP_SEND_ERROR | {response.text}")
             return response.status_code == 200
 
-        # ==========================================
-        # LOCAL FILE (fallback)
-        # ==========================================
-        with open(file_path, 'rb') as f:
-            logger.info(f'LOCAL_FILE_SENT | path={file_path}')
-            return True
+        # --------------------------------------------------
+        # 3. LOCAL FILE FALLBACK (Uploads via Media API)
+        # --------------------------------------------------
+        else:
+            if not os.path.exists(file_path):
+                logger.error(f"LOCAL_FILE_NOT_FOUND | path={file_path}")
+                return False
+
+            media_upload_url = f'https://graph.facebook.com/v23.0/{PHONE_NUMBER_ID}/media'
+            filename = os.path.basename(file_path)
+
+            with open(file_path, 'rb') as f:
+                files = {
+                    'file': (filename, f, 'application/pdf'),
+                    'messaging_product': (None, 'whatsapp'),
+                    'type': (None, 'application/pdf'),
+                }
+                media_headers = {'Authorization': f'Bearer {WHATSAPP_TOKEN}'}
+                media_resp = requests.post(media_upload_url, headers=media_headers, files=files, timeout=30)
+                
+                if media_resp.status_code != 200:
+                    logger.error(f"MEDIA_UPLOAD_FAILED | {media_resp.text}")
+                    return False
+                
+                media_id = media_resp.json().get('id')
+
+            payload = {
+                'messaging_product': 'whatsapp',
+                'to': str(to),
+                'type': 'document',
+                'document': {
+                    'id': media_id,
+                    'caption': caption,
+                    'filename': filename
+                }
+            }
+
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            logger.info(f'WHATSAPP_LOCAL_MEDIA_SENT | to={to} | status={response.status_code}')
+            return response.status_code == 200
 
     except Exception:
-        logger.exception(
-            f'WHATSAPP_DOCUMENT_EXCEPTION | to={to} | file={caption}'
-        )
+        logger.exception(f'WHATSAPP_DOCUMENT_EXCEPTION | to={to} | file={file_path}')
         return False
 
     

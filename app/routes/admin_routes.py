@@ -1052,87 +1052,111 @@ MONTH_MAP = {
 @admin_bp.route("/upload-bulk-salary", methods=["POST"])
 @login_required
 def bulk_upload_salary():
-    """Extracts salary PDFs from a ZIP file, encrypts each with a password, and uploads to S3."""
-    if "salary_zip" not in request.files:
-        flash("❌ No ZIP file selected")
-        return redirect(url_for("admin.upload_salary"))
-
-    zip_file = request.files["salary_zip"]
-
-    if not zip_file or zip_file.filename == "":
-        flash("❌ No file selected")
-        return redirect(url_for("admin.upload_salary"))
-
-    if not zip_file.filename.lower().endswith(".zip"):
-        flash("❌ Only .zip files are allowed for bulk upload")
-        return redirect(url_for("admin.upload_salary"))
-
-    success_count = 0
-    skipped_count = 0
-
-    try:
-        # Read the uploaded zip archive into memory
-        with zipfile.ZipFile(io.BytesIO(zip_file.read()), "r") as z:
-            for file_info in z.infolist():
-                filename = os.path.basename(file_info.filename)
-
-                # Skip directories, Mac metadata files, and non-PDFs
-                if not filename.lower().endswith(".pdf") or filename.startswith(".") or file_info.is_dir():
-                    continue
-
-                # Expected standard naming format: EMP001_6_2026.pdf or EMP001_June_2026.pdf
-                base_name = filename[:-4]  # Remove .pdf
-                parts = base_name.split("_")
-
-                if len(parts) != 3:
-                    logger.warning(f"BULK_UPLOAD_SKIPPED_INVALID_NAME | file={filename}")
-                    skipped_count += 1
-                    continue
-
-                emp_id, month_str, year_str = parts[0].strip(), parts[1].strip(), parts[2].strip()
-
-                # Robust parsing for numeric (e.g., '6') or string (e.g., 'June', 'jun') months
-                try:
-                    year = int(year_str)
-                    if month_str.isdigit():
-                        month = int(month_str)
-                    else:
-                        # Converts 'June', 'jun', 'JUNE' -> 6
-                        month = datetime.datetime.strptime(month_str[:3].title(), "%b").month
-                except (ValueError, IndexError):
-                    logger.warning(f"BULK_UPLOAD_INVALID_DATE_VALUES | file={filename}")
-                    skipped_count += 1
-                    continue
-
-                # 1. Fetch employee to get password details
-                employee = get_employee(emp_id)
-                if not employee:
-                    logger.warning(f"BULK_UPLOAD_EMPLOYEE_NOT_FOUND | employee_id={emp_id}")
-                    skipped_count += 1
-                    continue
-
-                # Handle dict or tuple format
-                phone_num = employee.get("whatsapp") if isinstance(employee, dict) else employee[5]
-
-                # 2. Generate password (e.g. EMP001@5888)
-                pdf_password = generate_salary_pdf_password(emp_id, phone_num)
-
-                # 3. Read raw PDF bytes from ZIP and encrypt
-                raw_pdf_bytes = z.read(file_info.filename)
-                encrypted_pdf_stream = protect_pdf_with_password(raw_pdf_bytes, pdf_password)
-
-                # 4. Upload encrypted stream to S3
-                s3_key = upload_salary_to_s3(encrypted_pdf_stream, filename)
-
-                # 5. Save metadata record in database
-                save_salary_slip(emp_id, month, year, s3_key)
-                success_count += 1
-
-        log_activity(f"Bulk salary upload processed: {success_count} uploaded, {skipped_count} skipped")
-        flash(f"✅ Bulk upload complete! {success_count} slips encrypted & uploaded ({skipped_count} skipped).")
-
-    except Exception as e:
-        logger.exception("BULK_SALARY_UPLOAD_ERROR")
-        flash(f"❌ Failed to process bulk ZIP file: {str(e)}")
-
+  """Extracts salary PDFs from a ZIP file, encrypts each with a password, and uploads to S3."""
+  if "salary_zip" not in request.files:
+    flash("❌ No ZIP file selected")
     return redirect(url_for("admin.upload_salary"))
+
+  zip_file = request.files["salary_zip"]
+
+  if not zip_file or zip_file.filename == "":
+    flash("❌ No file selected")
+    return redirect(url_for("admin.upload_salary"))
+
+  if not zip_file.filename.lower().endswith(".zip"):
+    flash("❌ Only .zip files are allowed for bulk upload")
+    return redirect(url_for("admin.upload_salary"))
+
+  success_count = 0
+  skipped_count = 0
+
+  try:
+    # Read the uploaded zip archive into memory
+    with zipfile.ZipFile(io.BytesIO(zip_file.read()), "r") as z:
+      for file_info in z.infolist():
+        filename = os.path.basename(file_info.filename)
+
+        # Skip directories, Mac metadata files, and non-PDFs
+        if (
+            not filename.lower().endswith(".pdf")
+            or filename.startswith(".")
+            or file_info.is_dir()
+        ):
+          continue
+
+        # Expected standard naming format: EMP001_6_2026.pdf or EMP001_June_2026.pdf
+        base_name = filename[:-4]  # Remove .pdf
+        parts = base_name.split("_")
+
+        if len(parts) != 3:
+          logger.warning(f"BULK_UPLOAD_SKIPPED_INVALID_NAME | file={filename}")
+          skipped_count += 1
+          continue
+
+        emp_id, month_str, year_str = (
+            parts[0].strip(),
+            parts[1].strip(),
+            parts[2].strip(),
+        )
+
+        # Robust parsing for numeric (e.g., '6') or string (e.g., 'June', 'jun') months
+        try:
+          year = int(year_str)
+          if month_str.isdigit():
+            month = int(month_str)
+          else:
+            # Converts 'June', 'jun', 'JUNE' -> 6
+            month = datetime.datetime.strptime(
+                month_str[:3].title(), "%b"
+            ).month
+        except (ValueError, IndexError):
+          logger.warning(f"BULK_UPLOAD_INVALID_DATE_VALUES | file={filename}")
+          skipped_count += 1
+          continue
+
+        # 1. Fetch employee to get password details
+        employee = get_employee(emp_id)
+        if not employee:
+          logger.warning(
+              f"BULK_UPLOAD_EMPLOYEE_NOT_FOUND | employee_id={emp_id}"
+          )
+          skipped_count += 1
+          continue
+
+        # Extract whatsapp number safely (index 2 for tuple/list based on DB schema)
+        phone_num = (
+            employee.get("whatsapp")
+            if isinstance(employee, dict)
+            else (employee[2] if len(employee) > 2 else None)
+        )
+
+        # 2. Generate password (e.g. EMP001@5888)
+        pdf_password = generate_salary_pdf_password(emp_id, phone_num or "0000")
+
+        # 3. Read raw PDF bytes from ZIP and encrypt
+        raw_pdf_bytes = z.read(file_info.filename)
+        encrypted_pdf_stream = protect_pdf_with_password(
+            raw_pdf_bytes, pdf_password
+        )
+
+        # 4. Upload encrypted stream to S3
+        s3_key = upload_salary_to_s3(encrypted_pdf_stream, filename)
+
+        # 5. Save metadata record in database
+        save_salary_slip(emp_id, month, year, s3_key)
+        success_count += 1
+
+    log_activity(
+        f"Bulk salary upload processed: {success_count} uploaded,"
+        f" {skipped_count} skipped"
+    )
+    flash(
+        f"✅ Bulk upload complete! {success_count} slips encrypted & uploaded"
+        f" ({skipped_count} skipped)."
+    )
+
+  except Exception as e:
+    logger.exception("BULK_SALARY_UPLOAD_ERROR")
+    flash(f"❌ Failed to process bulk ZIP file: {str(e)}")
+
+  return redirect(url_for("admin.upload_salary"))

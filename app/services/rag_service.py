@@ -8,9 +8,8 @@ Location: app/services/rag_service.py
 import logging
 import os
 import re
-
+from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
 from rank_bm25 import BM25Okapi
 
 from app.services.memory_service import add_to_chat_history, get_chat_history
@@ -25,16 +24,14 @@ all_docs = []
 
 
 def load_indexes():
-  """Lazy-loads FAISS using local HuggingFace embeddings and builds BM25 index."""
+  """Loads FAISS using lightweight ONNX-based FastEmbed (<60 MB RAM)."""
   global faiss_store, bm25_index, all_docs
 
   if faiss_store is None:
     try:
-      # Free, local, lightweight embedding model (matches Google Colab indexer)
-      embeddings = HuggingFaceEmbeddings(
-          model_name="sentence-transformers/all-MiniLM-L6-v2",
-          model_kwargs={"device": "cpu"},
-          encode_kwargs={"normalize_embeddings": True},
+      # Ultra-lightweight ONNX runtime (matches all-MiniLM-L6-v2 vectors)
+      embeddings = FastEmbedEmbeddings(
+          model_name="sentence-transformers/all-MiniLM-L6-v2"
       )
 
       if os.path.exists("faiss_index"):
@@ -43,19 +40,15 @@ def load_indexes():
         )
         all_docs = list(faiss_store.docstore._dict.values())
 
-        # Tokenize corpus for lightweight BM25 keyword matching
         tokenized_corpus = [
             doc.page_content.lower().split() for doc in all_docs
         ]
         bm25_index = BM25Okapi(tokenized_corpus)
-        logger.info(
-            "HYBRID_SEARCH_INDEXES_LOADED_SUCCESSFULLY (HuggingFace + BM25) ✅"
-        )
+        logger.info("HYBRID_INDEXES_LOADED_SUCCESSFULLY (FastEmbed + BM25) ✅")
       else:
-        logger.error("FAISS index directory 'faiss_index' not found!")
+        logger.error("faiss_index folder not found.")
     except Exception as e:
       logger.error(f"LOAD_INDEXES_ERROR | {e}")
-
 
 def multi_query_expansion(query: str, gemini_client) -> list[str]:
   """Generates 2 query variations to improve search recall."""

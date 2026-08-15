@@ -8,7 +8,7 @@ from dateparser.search import search_dates
 from flask import flash, redirect, send_file, url_for
 from google.genai.errors import ClientError, ServerError
 
-from app.services.whatsapp_service import send_text
+from app.services.whatsapp_service import send_interactive_buttons, send_text
 from database import (
     apply_leave,
     can_approve_leave,
@@ -26,9 +26,36 @@ from validators import (
 logger = logging.getLogger(__name__)
 
 
-def extract_leave_details(message):
-  """Extract leave details from user message."""
+def ask_leave_confirmation(
+    sender: str, from_date: str, to_date: str, total_days: int, reason: str
+):
+  """Sends summary with Quick Reply confirmation buttons."""
+  body_text = (
+      f"📝 *Leave Request Summary*\n"
+      f"━━━━━━━━━━━━━━━━━━━\n"
+      f"📅 *From:* {from_date}\n"
+      f"📅 *To:* {to_date}\n"
+      f"⏳ *Total Duration:* {total_days} day(s)\n"
+      f"📋 *Reason:* {reason}\n"
+      f"━━━━━━━━━━━━━━━━━━━\n\n"
+      f"Please confirm your submission below:"
+  )
 
+  buttons = [
+      {"id": "btn_confirm_leave", "title": "Confirm ✅"},
+      {"id": "btn_cancel_leave", "title": "Cancel ❌"},
+  ]
+
+  send_interactive_buttons(
+      recipient_id=sender,
+      body_text=body_text,
+      buttons=buttons,
+      header_text="🌴 Confirm Leave Application",
+  )
+
+
+def extract_leave_details(message: str) -> dict:
+  """Extract leave details (dates and reason) from user message."""
   result = {
       "from_date": None,
       "to_date": None,
@@ -38,24 +65,18 @@ def extract_leave_details(message):
 
   msg = message.lower()
 
-  # ---------------------------------
-  # Handle "today"
-  # ---------------------------------
+  # 1. Handle "today"
   if "today" in msg:
     result["from_date"] = datetime.now().strftime("%Y-%m-%d")
 
-  # ---------------------------------
-  # Extract dates using dateparser
-  # ---------------------------------
+  # 2. Extract dates using dateparser
   dates = search_dates(
-      message,
-      settings={"PREFER_DATES_FROM": "future", "STRICT_PARSING": True},
+      message, settings={"PREFER_DATES_FROM": "future", "STRICT_PARSING": True}
   )
 
   if dates:
     parsed_dates = [d[1].strftime("%Y-%m-%d") for d in dates]
 
-    # If "today" already set from_date, use detected date as to_date
     if result["from_date"]:
       if len(parsed_dates) >= 1:
         result["to_date"] = parsed_dates[0]
@@ -66,11 +87,8 @@ def extract_leave_details(message):
       elif len(parsed_dates) == 1:
         result["from_date"] = parsed_dates[0]
 
-  # ---------------------------------
-  # Extract reason by removing keywords
-  # ---------------------------------
+  # 3. Extract reason by stripping dates & conversational stop words
   clean = msg
-
   if dates:
     for original_text, _ in dates:
       clean = clean.replace(original_text.lower(), "")
@@ -113,9 +131,7 @@ def extract_leave_details(message):
   else:
     result["reason"] = None
 
-  # ---------------------------------
-  # Determine what information is missing
-  # ---------------------------------
+  # 4. Determine next expected field
   if not result["from_date"]:
     result["waiting_for"] = "from_date"
   elif not result["to_date"]:
@@ -123,17 +139,13 @@ def extract_leave_details(message):
   elif not result["reason"]:
     result["waiting_for"] = "reason"
   else:
-    result["waiting_for"] = None
+    result["waiting_for"] = "confirmation"
 
   return result
 
 
 def detect_leave_type_rule_based(reason: str) -> tuple[str, str]:
-  """Production-grade deterministic leave classifier.
-
-  Returns: (leave_type, priority)
-  """
-
+  """Production-grade deterministic leave classifier. Returns: (leave_type, priority)"""
   reason = reason.lower()
 
   sick_keywords = [
@@ -216,12 +228,14 @@ def get_leave_policy(query=None):
     return context
   except Exception as e:
     logger.warning(f"GET_LEAVE_POLICY_FALLBACK | error={e}")
-    return "Standard Leave Policy: Casual, Sick, and Earned Leaves subject to approval."
+    return (
+        "Standard Leave Policy: Casual, Sick, and Earned Leaves subject to"
+        " approval."
+    )
 
 
 def handle_leave_application(employee, leave_data, gemini_client):
-  """Production-ready leave application handler."""
-
+  """Submits validated leave request to database."""
   sender = employee["whatsapp"]
   employee_id = employee["employee_id"]
 
@@ -256,17 +270,10 @@ def handle_leave_application(employee, leave_data, gemini_client):
     reason = leave_data["reason"]
     leave_type, priority = detect_leave_type_rule_based(reason)
 
-    logger.info(
-        f"RULE_BASED_CLASSIFICATION | user={employee_id} |"
-        f" type={leave_type} | priority={priority}"
-    )
-
     # AI Validation for Ambiguous Cases
-    ai_used = False
     if leave_type == "Earned Leave" and gemini_client is not None:
       try:
         policy = get_leave_policy(reason)
-
         prompt = f"""
 Classify this leave request using the HR policy.
 Reason: {reason}
@@ -276,7 +283,6 @@ Policy Context: {policy}
 Return ONLY JSON:
 {{"leave_type":"...","priority":"..."}}
 """
-
         response = gemini_client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
@@ -288,7 +294,6 @@ Return ONLY JSON:
           text = text.replace("```json", "").replace("```", "").strip()
 
         data = json.loads(text)
-
         if data.get("leave_type") in [
             "Sick Leave",
             "Casual Leave",
@@ -296,7 +301,6 @@ Return ONLY JSON:
         ]:
           leave_type = data["leave_type"]
           priority = data.get("priority", priority)
-          ai_used = True
 
       except (ServerError, ClientError):
         logger.warning(
@@ -304,11 +308,6 @@ Return ONLY JSON:
         )
       except Exception:
         logger.exception(f"AI_CLASSIFICATION_ERROR | user={employee_id}")
-
-    logger.info(
-        f"FINAL_LEAVE_CLASSIFICATION | user={employee_id} | type={leave_type} |"
-        f" ai_used={ai_used}"
-    )
 
     # Check Balance
     allowed, balance_message = can_approve_leave(
@@ -335,11 +334,6 @@ Return ONLY JSON:
 
     log_activity(
         f"📝 {employee['name']} applied for {leave_type} ({leave_days} days)"
-    )
-
-    logger.info(
-        f"LEAVE_APPLIED | user={employee_id} | type={leave_type} |"
-        f" days={leave_days}"
     )
 
     response_message = f"""✅ *Leave Request Submitted*
@@ -373,7 +367,6 @@ Your request has been forwarded to your manager for review."""
 
 def start_leave_conversation(employee, message, gemini_client):
   """Start multi-turn leave application conversation."""
-
   sender = employee["whatsapp"]
 
   try:
@@ -398,9 +391,25 @@ def start_leave_conversation(employee, message, gemini_client):
       send_text(sender, "📝 Could you tell me the reason for your leave?")
       return
 
-    handle_leave_application(employee, details, gemini_client)
-    del leave_sessions[sender]
+    # If all details were provided in the very first prompt, trigger confirmation buttons
+    from_date, to_date = validate_date_range(
+        details["from_date"], details["to_date"]
+    )
+    total_days = (to_date - from_date).days + 1
+    details["total_days"] = total_days
+    details["waiting_for"] = "confirmation"
+    leave_sessions[sender] = details
 
+    ask_leave_confirmation(
+        sender=sender,
+        from_date=str(details["from_date"]),
+        to_date=str(details["to_date"]),
+        total_days=total_days,
+        reason=details["reason"],
+    )
+
+  except ValidationError as e:
+    send_text(sender, f"❌ {str(e)}")
   except Exception as e:
     logger.exception(f'START_LEAVE_ERROR | user={employee["employee_id"]}')
     send_text(sender, "❌ Error processing your request. Please try again.")
@@ -408,7 +417,6 @@ def start_leave_conversation(employee, message, gemini_client):
 
 def continue_leave_conversation(employee, message, gemini_client):
   """Continue multi-turn leave application conversation."""
-
   sender = employee["whatsapp"]
   employee_id = employee["employee_id"]
 
@@ -421,8 +429,37 @@ def continue_leave_conversation(employee, message, gemini_client):
       return
 
     waiting = session.get("waiting_for")
+    msg_cleaned = message.strip()
+    msg_lower = msg_cleaned.lower()
+
+    # 1. HANDLE CONFIRMATION BUTTON CLICKS & TEXT CONFIRMATIONS
+    if waiting == "confirmation":
+      if msg_cleaned == "btn_confirm_leave" or msg_lower in [
+          "yes",
+          "confirm",
+          "ok",
+          "y",
+          "proceed",
+      ]:
+        handle_leave_application(employee, session, gemini_client)
+        if sender in leave_sessions:
+          del leave_sessions[sender]
+        return
+
+      elif msg_cleaned == "btn_cancel_leave" or msg_lower in [
+          "no",
+          "cancel",
+          "stop",
+          "exit",
+      ]:
+        if sender in leave_sessions:
+          del leave_sessions[sender]
+        send_text(sender, "❌ Leave request cancelled.")
+        return
+
     details = extract_leave_details(message)
 
+    # 2. SLOT-FILLING PROMPTS
     if waiting == "from_date":
       if details["from_date"]:
         session["from_date"] = details["from_date"]
@@ -433,21 +470,23 @@ def continue_leave_conversation(employee, message, gemini_client):
       else:
         send_text(
             sender,
-            "❌ I couldn't understand the date. Please enter it again (e.g.,"
-            " 2026-08-01)",
+            "❌ I couldn't understand the date. Please enter it in YYYY-MM-DD"
+            " format (e.g., 2026-08-20).",
         )
         return
 
     elif waiting == "to_date":
-      if details["from_date"]:
-        session["to_date"] = details["from_date"]
+      if details["from_date"] or details["to_date"]:
+        session["to_date"] = details["from_date"] or details["to_date"]
         session["waiting_for"] = "reason"
         leave_sessions[sender] = session
         send_text(sender, "📝 What is the reason for your leave?")
         return
       else:
         send_text(
-            sender, "❌ I couldn't understand the date. Please enter it again."
+            sender,
+            "❌ I couldn't understand the date. Please enter it again (e.g.,"
+            " 2026-08-22).",
         )
         return
 
@@ -459,6 +498,7 @@ def continue_leave_conversation(employee, message, gemini_client):
 
       leave_sessions[sender] = session
 
+    # 3. VERIFY ALL SLOTS AND TRIGGER CONFIRMATION BUTTONS
     if not session.get("from_date"):
       session["waiting_for"] = "from_date"
       leave_sessions[sender] = session
@@ -477,11 +517,25 @@ def continue_leave_conversation(employee, message, gemini_client):
       send_text(sender, "📝 What is the reason for your leave?")
       return
 
-    handle_leave_application(employee, session, gemini_client)
-    if sender in leave_sessions:
-      del leave_sessions[sender]
-    logger.info(f"LEAVE_SUBMITTED | user={employee_id}")
+    # All 3 slots collected -> calculate days and prompt confirmation buttons
+    from_date, to_date = validate_date_range(
+        session["from_date"], session["to_date"]
+    )
+    total_days = (to_date - from_date).days + 1
+    session["total_days"] = total_days
+    session["waiting_for"] = "confirmation"
+    leave_sessions[sender] = session
 
+    ask_leave_confirmation(
+        sender=sender,
+        from_date=str(session["from_date"]),
+        to_date=str(session["to_date"]),
+        total_days=total_days,
+        reason=session["reason"],
+    )
+
+  except ValidationError as e:
+    send_text(sender, f"❌ {str(e)}")
   except Exception as e:
     logger.exception(f"CONTINUE_LEAVE_ERROR | user={employee_id}")
     send_text(sender, "❌ An error occurred. Please start again.")
@@ -491,20 +545,19 @@ def continue_leave_conversation(employee, message, gemini_client):
 
 def handle_leave_balance(employee):
   """Send employee's leave balance to WhatsApp."""
-
   sender = employee["whatsapp"]
   employee_id = employee["employee_id"]
 
   conn = None
   try:
-    reply = "*Your Leave Balance*\n\n"
+    reply = "📊 *Your Current Leave Balance*\n━━━━━━━━━━━━━━━━━━━\n\n"
 
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-            SELECT leave_name, yearly_limit
-            FROM leave_types
+            SELECT leave_name, yearly_limit 
+            FROM leave_types 
             ORDER BY leave_name
         """)
 
@@ -516,7 +569,6 @@ def handle_leave_balance(employee):
       return
 
     for leave_name, yearly_limit in leave_types:
-      # FIX: Updated SQLite '?' to PostgreSQL '%s'
       cursor.execute(
           """
                 SELECT COALESCE(SUM(leave_days), 0)
@@ -531,12 +583,12 @@ def handle_leave_balance(employee):
       used = cursor.fetchone()[0]
       remaining = yearly_limit - used
 
-      reply += f"*{leave_name}*\n"
-      reply += f"Total: {yearly_limit} days\n"
-      reply += f"Used: {used} days\n"
-      reply += f"Remaining: {remaining} days\n\n"
+      reply += f"🔹 *{leave_name}*\n"
+      reply += f"• Total: {yearly_limit} days\n"
+      reply += f"• Used: {used} days\n"
+      reply += f"• Remaining: *{remaining} days*\n\n"
 
-    send_text(sender, reply)
+    send_text(sender, reply.strip())
     logger.info(f"LEAVE_BALANCE_SENT | user={employee_id}")
 
   except Exception as e:
@@ -550,7 +602,6 @@ def handle_leave_balance(employee):
 
 def handle_leave_history(employee):
   """Send employee's leave history to WhatsApp."""
-
   sender = employee["whatsapp"]
   employee_id = employee["employee_id"]
 
@@ -562,20 +613,22 @@ def handle_leave_history(employee):
       logger.info(f"NO_LEAVE_HISTORY | user={employee_id}")
       return
 
-    message = "📋 *Your Leave History*\n\n"
+    message = "📋 *Your Leave History*\n━━━━━━━━━━━━━━━━━━━\n\n"
 
     for i, leave in enumerate(history, start=1):
+      status_icon = (
+          "✅"
+          if leave[3] == "Approved"
+          else ("⏳" if leave[3] == "Pending" else "❌")
+      )
       message += (
-          f"{i}. \n"
-          f"From: {leave[0]}\n"
-          f"To: {leave[1]}\n"
-          f"Type: {leave[2]}\n"
-          f"Status: {leave[3]}\n\n"
-          + "-" * 30
-          + "\n\n"
+          f"{i}. *{leave[2]}* {status_icon}\n"
+          f"📅 *Dates:* {leave[0]} to {leave[1]}\n"
+          f"📌 *Status:* {leave[3]}\n\n"
+          f"───────────────────\n\n"
       )
 
-    send_text(sender, message)
+    send_text(sender, message.strip())
     logger.info(f"LEAVE_HISTORY_SENT | user={employee_id}")
 
   except Exception as e:

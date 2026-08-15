@@ -20,46 +20,41 @@ logger = logging.getLogger(__name__)
 def handle_training_video(employee, message):
   """Send training video based on user request.
 
-  Supported categories:
-  - Health Insurance
-  - Safety
-  - Induction
+  Supported categories: Health Insurance, Safety, Induction.
   """
-
   sender = employee["whatsapp"]
-  employee_id = employee["employee_id"]
+  employee_id = (
+      employee.get("employee_id")
+      if isinstance(employee, dict)
+      else employee[1]
+  )
 
   try:
-    msg = message.lower()
+    msg = message.lower().strip()
 
-    # ----------------------------
-    # Detect requested category
-    # ----------------------------
+    # 1. Detect requested category
     if any(
         word in msg
         for word in ["insurance", "health insurance", "claim", "medical"]
     ):
       category = "Health Insurance"
-
     elif any(
         word in msg for word in ["safety", "fire", "security", "emergency"]
     ):
       category = "Safety"
-
     elif any(
         word in msg
         for word in ["induction", "joining", "onboarding", "welcome"]
     ):
       category = "Induction"
-
     else:
+      # Send list menu or prompt asking to choose a category
       send_text(
           sender,
-          "❌ Please specify which training video you need.\n\n"
-          "Examples:\n"
-          "• Health Insurance\n"
-          "• Safety\n"
-          "• Induction",
+          "🎥 *Please choose a training video category:*\n\n"
+          "• *Health Insurance* (e.g., _'Show health insurance video'_)\n"
+          "• *Safety* (e.g., _'Send safety video'_)\n"
+          "• *Induction* (e.g., _'Watch induction video'_)",
       )
       return
 
@@ -67,43 +62,33 @@ def handle_training_video(employee, message):
         f"VIDEO_CATEGORY | user={employee_id} | category={category}"
     )
 
-    # ----------------------------
-    # Fetch video from database
-    # ----------------------------
+    # 2. Fetch video from database
     video = get_training_video_by_category(category)
 
     if not video:
       logger.warning(
           f"VIDEO_NOT_FOUND | user={employee_id} | category={category}"
       )
-
-      send_text(sender, f"❌ {category} video is not available.")
+      send_text(sender, f"❌ *{category}* training video is currently not available.")
       return
 
     title, s3_key = video[0], video[1]
-
     logger.info(f"VIDEO_FOUND | user={employee_id} | key={s3_key}")
 
-    # ----------------------------
-    # Generate S3 URL
-    # ----------------------------
+    # 3. Generate Presigned URL & Deliver
     video_url = generate_presigned_url(s3_key)
+    if not video_url:
+      send_text(sender, "❌ Unable to generate video link. Please try again later.")
+      return
 
-    logger.info(f"VIDEO_URL_GENERATED | user={employee_id}")
-
-    # ----------------------------
-    # Send WhatsApp video
-    # ----------------------------
-    send_video(sender, video_url, caption=f"📹 {title}")
-
+    send_video(sender, video_url, caption=f"📹 *{title}*")
     logger.info(
         f"TRAINING_VIDEO_SENT | user={employee_id} | category={category}"
     )
 
   except Exception:
     logger.exception(f"TRAINING_VIDEO_ERROR | user={employee_id}")
-
-    send_text(sender, "❌ Error sending training video.")
+    send_text(sender, "❌ Error retrieving training video.")
 
 
 def handle_salary_slip(employee, message):
@@ -239,43 +224,92 @@ _Example:_ `{example_password}`"""
     )
 
 
+from app.services.whatsapp_service import send_interactive_list
+
 def handle_greeting(employee: dict):
-    """Sends an introduction and interactive menu when an employee greets the bot."""
+    """Sends a greeting with an interactive list picker."""
     sender = employee["whatsapp"]
-    name = employee.get("name", "there").split()[0]  # First name
+    raw_name = employee.get("name", "there") if isinstance(employee, dict) else employee[2]
+    name = raw_name.split()[0]
 
-    welcome_message = f"""👋 *Hello {name}!*
+    body_text = f"👋 Hello *{name}*! I am your AI HR Assistant.\n\nTap the button below to choose an action, or simply ask any company policy question."
+    
+    sections = [
+        {
+            "title": "📋 Leave Management",
+            "rows": [
+                {
+                    "id": "action_apply_leave",
+                    "title": "🌴 Apply for Leave",
+                    "description": "Request casual, sick, or earned leave"
+                },
+                {
+                    "id": "action_leave_balance",
+                    "title": "📊 Check Leave Balance",
+                    "description": "View remaining CL, SL, and EL"
+                },
+                {
+                    "id": "action_leave_history",
+                    "title": "📜 View Leave History",
+                    "description": "See past and pending requests"
+                }
+            ]
+        },
+        {
+            "title": "💼 Payroll & Documents",
+            "rows": [
+                {
+                    "id": "action_salary_slip",
+                    "title": "💰 Get Salary Slip",
+                    "description": "Download your latest password-protected payslip"
+                },
+                {
+                    "id": "action_training_videos",
+                    "title": "🎥 Training Videos",
+                    "description": "Watch policy & induction guides"
+                }
+            ]
+        }
+    ]
 
-I am your **AI HR Assistant**. I'm here to help you manage your workplace requests and answer HR policy questions instantly.
-
----
-
-📌 *Here is what I can do for you:*
-
-1️⃣ *Apply for Leave*
-   • e.g., _"I need leave from 20\u200b-08\u200b-2026 to 22\u200b-08\u200b-2026 for personal work"_
-
-2️⃣ *Check Leave Balance*
-   • e.g., _"What is my leave balance?"_
-
-3️⃣ *Check Leave History*
-   • e.g., _"Show my leave history"_
-
-4️⃣ *Get Salary Slips*
-   • e.g., _"Give my latest salary slip"_ or _"Send June salary slip"_
-
-5️⃣ *Training & Induction Videos*
-   • e.g., _"Send training video"_ or _"Show health insurance video"_
-
-6️⃣ *HR & Company Policy Q&A*
-   • e.g., _"What is the standard probation period?"_
-   • e.g., _"What is the travel reimbursement policy?"_
-
----
-
-💬 *How can I help you today?*"""
-
-    send_text(sender, welcome_message)
-    logger.info(
-        f"GREETING_SENT | user={employee.get('employee_id')} | name={name}"
+    send_interactive_list(
+        recipient_id=sender,
+        body_text=body_text,
+        button_label="Explore Menu 📋",
+        sections=sections,
+        header_text="🏢 HR Services Menu"
     )
+
+def extract_message_info(data: dict):
+    """Extracts text or interactive button/list selection from WhatsApp webhook."""
+    try:
+        entry = data["entry"][0]["changes"][0]["value"]
+        messages = entry.get("messages", [])
+        if not messages:
+            return None, None
+
+        msg_obj = messages[0]
+        sender = msg_obj.get("from")
+        msg_type = msg_obj.get("type")
+
+        # 1. Plain Text Message
+        if msg_type == "text":
+            return sender, msg_obj["text"]["body"]
+
+        # 2. Interactive List Selection or Button Click
+        elif msg_type == "interactive":
+            interactive_obj = msg_obj.get("interactive", {})
+            itype = interactive_obj.get("type")
+
+            if itype == "list_reply":
+                # Returns the 'id' (e.g., 'action_apply_leave')
+                return sender, interactive_obj["list_reply"]["id"]
+
+            elif itype == "button_reply":
+                # Returns the 'id' (e.g., 'btn_confirm_leave')
+                return sender, interactive_obj["button_reply"]["id"]
+
+        return sender, None
+    except Exception as e:
+        logger.error(f"WEBHOOK_PARSE_ERROR | {e}")
+        return None, None

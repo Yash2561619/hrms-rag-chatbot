@@ -1051,7 +1051,7 @@ MONTH_MAP = {
 
 @admin_bp.route("/upload-bulk-salary", methods=["POST"])
 @login_required
-def upload_bulk_salary():
+def bulk_upload_salary():
     """Extracts salary PDFs from a ZIP file, encrypts each with a password, and uploads to S3."""
     if "salary_zip" not in request.files:
         flash("❌ No ZIP file selected")
@@ -1080,7 +1080,7 @@ def upload_bulk_salary():
                 if not filename.lower().endswith(".pdf") or filename.startswith(".") or file_info.is_dir():
                     continue
 
-                # Expected standard naming format: EMP001_6_2026.pdf -> [EMP001, 6, 2026]
+                # Expected standard naming format: EMP001_6_2026.pdf or EMP001_June_2026.pdf
                 base_name = filename[:-4]  # Remove .pdf
                 parts = base_name.split("_")
 
@@ -1091,10 +1091,15 @@ def upload_bulk_salary():
 
                 emp_id, month_str, year_str = parts[0].strip(), parts[1].strip(), parts[2].strip()
 
+                # Robust parsing for numeric (e.g., '6') or string (e.g., 'June', 'jun') months
                 try:
-                    month = int(month_str)
                     year = int(year_str)
-                except ValueError:
+                    if month_str.isdigit():
+                        month = int(month_str)
+                    else:
+                        # Converts 'June', 'jun', 'JUNE' -> 6
+                        month = datetime.datetime.strptime(month_str[:3].title(), "%b").month
+                except (ValueError, IndexError):
                     logger.warning(f"BULK_UPLOAD_INVALID_DATE_VALUES | file={filename}")
                     skipped_count += 1
                     continue
@@ -1123,7 +1128,7 @@ def upload_bulk_salary():
                 save_salary_slip(emp_id, month, year, s3_key)
                 success_count += 1
 
-        log_activity(f"📦 Bulk salary upload processed: {success_count} uploaded, {skipped_count} skipped")
+        log_activity(f"Bulk salary upload processed: {success_count} uploaded, {skipped_count} skipped")
         flash(f"✅ Bulk upload complete! {success_count} slips encrypted & uploaded ({skipped_count} skipped).")
 
     except Exception as e:

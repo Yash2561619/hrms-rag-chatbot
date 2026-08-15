@@ -508,17 +508,44 @@ def update_employee(employee_id, name, whatsapp, manager, department):
   cursor.close()
   conn.close()
 
-
+logger = logging.getLogger(__name__)
 def delete_employee(employee_id):
-  conn = get_connection()
-  cursor = conn.cursor()
+  conn = None
+  try:
+    conn = get_connection()
+    cursor = conn.cursor()
 
-  cursor.execute(
-      "DELETE FROM employees WHERE employee_id = %s", (employee_id,)
-  )
-  conn.commit()
-  cursor.close()
-  conn.close()
+    # 1. Delete dependent child records first
+    cursor.execute(
+        "DELETE FROM leave_requests WHERE employee_id = %s", (employee_id,)
+    )
+
+    # 2. Delete salary slips if applicable
+    try:
+      cursor.execute(
+          "DELETE FROM salary_slips WHERE employee_id = %s", (employee_id,)
+      )
+    except Exception:
+      pass
+
+    # 3. Delete the employee record
+    cursor.execute(
+        "DELETE FROM employees WHERE employee_id = %s", (employee_id,)
+    )
+
+    conn.commit()
+    logger.info(f"EMPLOYEE_DELETED | employee_id={employee_id}")
+    return True
+
+  except Exception as e:
+    if conn:
+      conn.rollback()
+    logger.exception(f"DELETE_EMPLOYEE_ERROR | employee_id={employee_id}")
+    raise e
+  finally:
+    if conn:
+      cursor.close()
+      conn.close()
 
 
 def get_monthly_leave_data():

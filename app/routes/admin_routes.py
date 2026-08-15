@@ -1,6 +1,8 @@
 from functools import wraps
 import logging
 import os
+import calendar
+from datetime import datetime
 import threading
 import boto3
 from flask import (
@@ -1076,7 +1078,7 @@ def bulk_upload_salary():
       for file_info in z.infolist():
         filename = os.path.basename(file_info.filename)
 
-        # Skip directories, Mac metadata files, and non-PDFs
+        # Skip directories, Mac metadata files (__MACOSX, .DS_Store), and non-PDFs
         if (
             not filename.lower().endswith(".pdf")
             or filename.startswith(".")
@@ -1084,7 +1086,7 @@ def bulk_upload_salary():
         ):
           continue
 
-        # Expected standard naming format: EMP001_6_2026.pdf or EMP001_June_2026.pdf
+        # Expected format: EMP001_6_2026.pdf or EMP001_June_2026.pdf
         base_name = filename[:-4]  # Remove .pdf
         parts = base_name.split("_")
 
@@ -1099,22 +1101,22 @@ def bulk_upload_salary():
             parts[2].strip(),
         )
 
-        # Robust parsing for numeric (e.g., '6') or string (e.g., 'June', 'jun') months
+        # Robust month & year parsing
         try:
           year = int(year_str)
           if month_str.isdigit():
             month = int(month_str)
           else:
             # Converts 'June', 'jun', 'JUNE' -> 6
-            month = datetime.datetime.strptime(
-                month_str[:3].title(), "%b"
-            ).month
+            month = datetime.strptime(month_str[:3].title(), "%b").month
         except (ValueError, IndexError):
-          logger.warning(f"BULK_UPLOAD_INVALID_DATE_VALUES | file={filename}")
+          logger.warning(
+              f"BULK_UPLOAD_INVALID_DATE_VALUES | file={filename}"
+          )
           skipped_count += 1
           continue
 
-        # 1. Fetch employee to get password details
+        # 1. Fetch employee from DB to get phone details
         employee = get_employee(emp_id)
         if not employee:
           logger.warning(
@@ -1123,17 +1125,19 @@ def bulk_upload_salary():
           skipped_count += 1
           continue
 
-        # Extract whatsapp number safely (index 2 for tuple/list based on DB schema)
+        # Extract phone number (dict or tuple format)
         phone_num = (
-            employee.get("whatsapp")
+            employee.get("whatsapp") or employee.get("phone")
             if isinstance(employee, dict)
-            else (employee[2] if len(employee) > 2 else None)
+            else (employee[5] if len(employee) > 5 else employee[2])
         )
 
-        # 2. Generate password (e.g. EMP001@5888)
-        pdf_password = generate_salary_pdf_password(emp_id, phone_num or "0000")
+        # 2. Generate password (e.g., EMP001@5888)
+        pdf_password = generate_salary_pdf_password(
+            emp_id, phone_num or "0000"
+        )
 
-        # 3. Read raw PDF bytes from ZIP and encrypt
+        # 3. Read raw PDF bytes from ZIP and encrypt in-memory
         raw_pdf_bytes = z.read(file_info.filename)
         encrypted_pdf_stream = protect_pdf_with_password(
             raw_pdf_bytes, pdf_password
@@ -1142,12 +1146,12 @@ def bulk_upload_salary():
         # 4. Upload encrypted stream to S3
         s3_key = upload_salary_to_s3(encrypted_pdf_stream, filename)
 
-        # 5. Save metadata record in database
+        # 5. Save record in database
         save_salary_slip(emp_id, month, year, s3_key)
         success_count += 1
 
     log_activity(
-        f"Bulk salary upload processed: {success_count} uploaded,"
+        f"📦 Bulk salary upload processed: {success_count} uploaded,"
         f" {skipped_count} skipped"
     )
     flash(

@@ -28,6 +28,7 @@ from app.services.media_service import (
     handle_salary_slip,
     handle_training_video,
 )
+from app.services.media_service import handle_greeting
 from app.services.rag_service import handle_rag_query
 from app.services.s3_service import sync_faiss_from_s3
 from app.services.whatsapp_service import configure, mark_read, send_text

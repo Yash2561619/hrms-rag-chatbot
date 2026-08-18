@@ -109,47 +109,51 @@ def hybrid_retrieve(
 def math_rrf_rerank(
     faiss_chunks: list, bm25_chunks: list, top_k: int = 4
 ) -> tuple[str, str, list]:
-  """Reranks candidate chunks mathematically using Reciprocal Rank Fusion (RRF)."""
+  """Reranks candidate chunks mathematically and formats clean citations."""
   if not faiss_chunks and not bm25_chunks:
     return "", "", []
 
   rrf_scores = {}
   chunk_map = {}
 
-  # Score FAISS vector ranks
   for rank, doc in enumerate(faiss_chunks, start=1):
     doc_id = doc.page_content
     chunk_map[doc_id] = doc
     rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (60 + rank))
 
-  # Score BM25 keyword ranks
   for rank, doc in enumerate(bm25_chunks, start=1):
     doc_id = doc.page_content
     chunk_map[doc_id] = doc
     rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (60 + rank))
 
-  # Sort chunks by highest RRF score
   sorted_docs = sorted(
       rrf_scores.items(), key=lambda item: item[1], reverse=True
   )
   top_docs = [chunk_map[doc_id] for doc_id, score in sorted_docs[:top_k]]
 
-  # Format context string for Gemini
   context = "\n---\n".join([d.page_content for d in top_docs])
 
-  # Extract official source citations for WhatsApp footer
+  # Clean source formatting without markdown breaks
   sources_set = set()
   for doc in top_docs:
     source_file = doc.metadata.get("source", "")
     page_num = doc.metadata.get("page", "")
-    if source_file:
-      clean_name = os.path.basename(source_file)
-      page_text = f" (Page {page_num})" if page_num else ""
-      sources_set.add(f"📄 *{clean_name}*{page_text}")
 
-  citation_footer = (
-      "\n\n_Source: " + ", ".join(sources_set) + "_" if sources_set else ""
-  )
+    # Exclude index-only summary files from the citations footer
+    if source_file and "INDEX" not in source_file.upper():
+      clean_name = os.path.basename(source_file)
+      clean_name = re.sub(r"^\d+_", "", clean_name)
+      clean_name = clean_name.replace(".pdf", "").replace("_", " ")
+
+      page_text = f" (Page {page_num})" if page_num else ""
+      sources_set.add(f"{clean_name}{page_text}")
+
+  if sources_set:
+    citation_footer = (
+        "\n━━━━━━━━━━━━━━━━━━━\n📁 *Source:* " + ", ".join(sorted(sources_set))
+    )
+  else:
+    citation_footer = ""
 
   return context, citation_footer, top_docs
 
@@ -169,10 +173,12 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
   for doc in chunks[:4]:
     source_file = doc.metadata.get("source", "")
     page_num = doc.metadata.get("page", "")
-    if source_file:
+    if source_file and "INDEX" not in source_file.upper():
       clean_name = os.path.basename(source_file)
+      clean_name = re.sub(r"^\d+_", "", clean_name)
+      clean_name = clean_name.replace(".pdf", "").replace("_", " ")
       page_text = f" (Page {page_num})" if page_num else ""
-      sources_set.add(f"📄 *{clean_name}*{page_text}")
+      sources_set.add(f"{clean_name}{page_text}")
 
     text = re.sub(r"\s+", " ", doc.page_content).strip()
 
@@ -187,30 +193,30 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
       break
 
   bullet_points = "\n".join([f"• {s}." for s in clean_sentences])
-  citation_footer = (
-      "\n\n_Source: " + ", ".join(sources_set) + "_" if sources_set else ""
-  )
+  if sources_set:
+    citation_footer = (
+        "\n━━━━━━━━━━━━━━━━━━━\n📁 *Source:* " + ", ".join(sorted(sources_set))
+    )
+  else:
+    citation_footer = ""
 
   fallback_text = (
-      "⚠️ *High server traffic. Here are relevant policy excerpts:* \n\n"
+      "📋 *Policy Excerpts (High Traffic Mode)*\n━━━━━━━━━━━━━━━━━━━\n\n"
       f"{bullet_points}\n\n"
-      "_Please try asking again in a minute for a full generated summary._"
+      "_Please ask again in a moment for a synthesized summary._"
   )
 
   return fallback_text, citation_footer
 
 
 def handle_rag_query(employee, query: str, collection_unused, gemini_client):
-  """Handles end-to-end RAG query flow with multi-turn memory and LLM response."""
+  """Handles end-to-end RAG query flow with card formatting."""
   sender = employee["whatsapp"]
   employee_id = employee.get("employee_id")
   logger.info(f"RAG_QUERY_START | user={employee_id}")
 
   try:
-    # 1. Fetch past conversation history from Upstash Redis
     chat_history_str = get_chat_history(employee_id, max_messages=4)
-
-    # 2. Multi-Query Expansion & Hybrid Retrieval
     expanded_queries = multi_query_expansion(query, gemini_client)
     dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(
         expanded_queries, top_k=6
@@ -219,23 +225,27 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
     if not all_retrieved:
       send_text(
           sender,
-          "❌ I couldn't find relevant information in the HR policy"
+          "❌ I couldn't find relevant information in the company policy"
           " documents.",
       )
       return
 
-    # 3. Math RRF Re-ranking (retrieve top 3-4 chunks for full context)
     context, citation_footer, top_docs = math_rrf_rerank(
         dense_docs, sparse_docs, top_k=3
     )
 
-    # 4. Context-Aware Prompt
-    prompt = f"""You are an expert HR Assistant. Answer the employee's query completely, concisely, and accurately based ONLY on the provided HR Policy Context.
+    prompt = f"""You are an AI HR Assistant. Formulate your answer directly for WhatsApp reading as a structured card.
 
-Rules:
-1. Provide a clear, bulleted or structured summary covering eligibility, approvals, and key rules.
-2. Complete all sentences. Do not truncate.
-3. If the context does not contain the answer, say: "The requested details are not covered in the current HR policy documents."
+FORMATTING RULES:
+1. Start directly with the card header:
+📋 *Policy Information*
+━━━━━━━━━━━━━━━━━━━
+2. Do NOT write conversational fluff, pleasantries, or preamble sentences like "Here is a summary...", "Based on the policy...", "According to...".
+3. Use bullet points (•) with bold category labels (e.g., • *Permanent Employee:* 60 Days notice).
+4. Group related points under bold section headers with emojis (e.g., 📌 *Notice Periods:*, 📌 *Important Guidelines:*).
+5. Never leave sentences unfinished or truncated.
+6. If the context does not contain the answer, reply ONLY with:
+❌ This information is not covered in our official policy documents.
 
 ---
 Conversation History:
@@ -247,35 +257,32 @@ HR Policy Context:
 Employee Question:
 {query}
 
-Answer:"""
+Card Response:"""
 
     response_text = None
 
-    # 5. Primary LLM Generation Call
     try:
       response = gemini_client.models.generate_content(
           model="gemini-2.5-flash",
           contents=prompt,
           config=types.GenerateContentConfig(
-              temperature=0.2,
-              max_output_tokens=800,
+              temperature=0.1,
+              max_output_tokens=700,
               tools=[],
           ),
       )
       if response and response.text:
         response_text = response.text.strip()
     except Exception as err:
-      logger.warning(f"LLM_GENERATION_FAILED | error: {err}")
+      logger.warning(f"LLM_GENERATION_FAILED | {err}")
 
-    # Fallback to raw excerpts if API fails
     if not response_text:
       response_text, citation_footer = format_raw_chunks_fallback(all_retrieved)
 
-    # 6. Save successful interaction to Memory
     if response_text:
       add_to_chat_history(employee_id, query, response_text)
 
-    # 7. Send complete WhatsApp response
+    # Deliver final card-styled message
     final_whatsapp_msg = f"{response_text}{citation_footer}"
     send_text(sender, final_whatsapp_msg)
     logger.info(f"RAG_QUERY_SUCCESS | user={employee_id}")
@@ -284,6 +291,6 @@ Answer:"""
     logger.exception(f"RAG_FATAL_ERROR | user={employee_id}")
     send_text(
         sender,
-        "❌ An error occurred while processing your policy request. Please try"
-        " again later.",
+        "❌ An error occurred while retrieving policy details. Please try again"
+        " later.",
     )

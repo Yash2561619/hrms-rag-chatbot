@@ -1,7 +1,7 @@
 """Advanced RAG Service for HR Policy Queries.
 
 Includes Query Expansion, Hybrid FAISS + BM25 Search, Math RRF Re-Ranking,
-and Langfuse SDK Observability.
+Semantic Redis Caching, and Langfuse Production Observability.
 Location: app/services/rag_service.py
 """
 
@@ -19,18 +19,8 @@ from app.services.semantic_cache_service import (
     get_semantic_cached_answer,
     save_semantic_cached_answer,
 )
+from app.services.telemetry_service import trace_rag_interaction
 from app.services.whatsapp_service import send_text
-
-# Safe initialization of Langfuse Client
-try:
-    from langfuse import Langfuse
-    langfuse_client = Langfuse(
-        public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-        secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-        host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
-    )
-except Exception:
-    langfuse_client = None
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +95,11 @@ def hybrid_retrieve(
     sparse_docs = []
 
     for q in queries:
+        # 1. FAISS Dense Retrieval
         d_docs = faiss_store.similarity_search(q, k=top_k)
         dense_docs.extend(d_docs)
 
+        # 2. BM25 Sparse Keyword Retrieval
         tokenized_q = q.lower().split()
         bm25_scores = bm25_index.get_scores(tokenized_q)
         top_indices = sorted(
@@ -147,11 +139,13 @@ def math_rrf_rerank(
 
     context = "\n---\n".join([d.page_content for d in top_docs])
 
+    # Clean source formatting without markdown breaks
     sources_set = set()
     for doc in top_docs:
         source_file = doc.metadata.get("source", "")
         page_num = doc.metadata.get("page", "")
 
+        # Exclude index-only summary files from citations footer
         if source_file and "INDEX" not in source_file.upper():
             clean_name = os.path.basename(source_file)
             clean_name = re.sub(r"^\d+_", "", clean_name)
@@ -160,11 +154,12 @@ def math_rrf_rerank(
             page_text = f" (Page {page_num})" if page_num else ""
             sources_set.add(f"{clean_name}{page_text}")
 
-    citation_footer = (
-        "\n━━━━━━━━━━━━━━━━━━━\n📁 *Source:* " + ", ".join(sorted(sources_set))
-        if sources_set
-        else ""
-    )
+    if sources_set:
+        citation_footer = (
+            "\n━━━━━━━━━━━━━━━━━━━\n📁 *Source:* " + ", ".join(sorted(sources_set))
+        )
+    else:
+        citation_footer = ""
 
     return context, citation_footer, top_docs
 
@@ -204,11 +199,12 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
             break
 
     bullet_points = "\n".join([f"• {s}." for s in clean_sentences])
-    citation_footer = (
-        "\n━━━━━━━━━━━━━━━━━━━\n📁 *Source:* " + ", ".join(sorted(sources_set))
-        if sources_set
-        else ""
-    )
+    if sources_set:
+        citation_footer = (
+            "\n━━━━━━━━━━━━━━━━━━━\n📁 *Source:* " + ", ".join(sorted(sources_set))
+        )
+    else:
+        citation_footer = ""
 
     fallback_text = (
         "📋 *Policy Excerpts (High Traffic Mode)*\n━━━━━━━━━━━━━━━━━━━\n\n"
@@ -220,7 +216,7 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
 
 
 def handle_rag_query(employee, query: str, collection_unused, gemini_client):
-    """Handles end-to-end RAG query flow with Semantic Cache + Hybrid RAG + Observability."""
+    """Handles end-to-end RAG query flow with Semantic Cache, Hybrid RAG, and Langfuse Tracing."""
     start_time = time.time()
     sender = employee["whatsapp"]
     employee_id = employee.get("employee_id") or "UNKNOWN_EMP"
@@ -229,35 +225,32 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
 
     try:
         # =========================================================================
-        # 1. SEMANTIC CACHE PROBE
+        # 1. SEMANTIC CACHE PROBE (Sub-50ms Fast Path)
         # =========================================================================
         cached_response, cached_footer = get_semantic_cached_answer(query)
         if cached_response:
             latency_ms = (time.time() - start_time) * 1000
             add_to_chat_history(employee_id, query, cached_response)
-            send_text(sender, f"{cached_response}{cached_footer}")
+            final_whatsapp_msg = f"{cached_response}{cached_footer}"
+            send_text(sender, final_whatsapp_msg)
 
-            if langfuse_client:
-                try:
-                    trace = langfuse_client.trace(
-                        name="hr_policy_chat",
-                        user_id=employee_id,
-                        session_id=session_id,
-                        input={"query": query},
-                        output={"response": cached_response},
-                        metadata={"cache_hit": True, "latency_ms": latency_ms},
-                        tags=["production", "whatsapp", "cache_hit"],
-                    )
-                    trace.score(name="cache_hit", value=1.0)
-                    langfuse_client.flush()
-                except Exception as te:
-                    logger.warning(f"TELEMETRY_ERROR | {te}")
-
-            logger.info(f"RAG_QUERY_SUCCESS (FROM_CACHE) ⚡ | user={employee_id}")
+            # Langfuse Trace: Cache Hit
+            trace_rag_interaction(
+                user_id=employee_id,
+                session_id=session_id,
+                query_text=query,
+                response_text=cached_response,
+                latency_ms=latency_ms,
+                cache_hit=True,
+                tokens_used={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            )
+            logger.info(
+                f"RAG_QUERY_SUCCESS (FROM_CACHE) ⚡ | user={employee_id} | latency={latency_ms:.1f}ms"
+            )
             return
 
         # =========================================================================
-        # 2. FULL RAG RETRIEVAL
+        # 2. FULL RAG RETRIEVAL (Executed on Cache Miss)
         # =========================================================================
         chat_history_str = get_chat_history(employee_id, max_messages=4)
         expanded_queries = multi_query_expansion(query, gemini_client)
@@ -266,8 +259,20 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
         )
 
         if not all_retrieved:
+            latency_ms = (time.time() - start_time) * 1000
             no_info_msg = "❌ I couldn't find relevant information in the company policy documents."
             send_text(sender, no_info_msg)
+
+            trace_rag_interaction(
+                user_id=employee_id,
+                session_id=session_id,
+                query_text=query,
+                response_text=no_info_msg,
+                latency_ms=latency_ms,
+                cache_hit=False,
+                tokens_used={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                retrieved_chunks=[],
+            )
             return
 
         context, citation_footer, top_docs = math_rrf_rerank(
@@ -300,8 +305,7 @@ Employee Question:
 Card Response:"""
 
         response_text = None
-        prompt_tokens = 0
-        completion_tokens = 0
+        tokens_used = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         try:
             response = gemini_client.models.generate_content(
@@ -315,58 +319,48 @@ Card Response:"""
             )
             if response and response.text:
                 response_text = response.text.strip()
+
+                # Extract Gemini usage metadata
                 if hasattr(response, "usage_metadata") and response.usage_metadata:
-                    prompt_tokens = getattr(response.usage_metadata, "prompt_token_count", 0) or 0
-                    completion_tokens = getattr(response.usage_metadata, "candidates_token_count", 0) or 0
+                    tokens_used = {
+                        "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) or 0,
+                        "completion_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) or 0,
+                        "total_tokens": getattr(response.usage_metadata, "total_token_count", 0) or 0,
+                    }
         except Exception as err:
             logger.warning(f"LLM_GENERATION_FAILED | {err}")
 
+        # Fallback if rate limits or network issues arise
         if not response_text:
             response_text, citation_footer = format_raw_chunks_fallback(all_retrieved)
 
-        # 3. Save to History & Cache
+        # 3. Save successful interaction to Chat Memory
         if response_text:
             add_to_chat_history(employee_id, query, response_text)
+            # 4. Save into Semantic Cache for future employees
             save_semantic_cached_answer(query, response_text, citation_footer)
 
-        # 4. Deliver Message
-        send_text(sender, f"{response_text}{citation_footer}")
+        # 5. Deliver final response
+        final_whatsapp_msg = f"{response_text}{citation_footer}"
+        send_text(sender, final_whatsapp_msg)
+
         latency_ms = (time.time() - start_time) * 1000
 
-        # 5. Log Trace to Langfuse
-        if langfuse_client:
-            try:
-                trace = langfuse_client.trace(
-                    name="hr_policy_chat",
-                    user_id=employee_id,
-                    session_id=session_id,
-                    input={"query": query},
-                    output={"response": response_text},
-                    metadata={"cache_hit": False, "latency_ms": latency_ms},
-                    tags=["production", "whatsapp", "rag"],
-                )
-                trace.span(
-                    name="hybrid_retrieval_and_rerank",
-                    input={"query": query},
-                    output={"chunks": [d.page_content for d in top_docs]},
-                )
-                trace.generation(
-                    name="gemini_2_5_flash_generation",
-                    model="gemini-2.5-flash",
-                    input=prompt,
-                    output=response_text,
-                    usage={
-                        "input": prompt_tokens,
-                        "output": completion_tokens,
-                        "total": prompt_tokens + completion_tokens,
-                    },
-                )
-                trace.score(name="cache_hit", value=0.0)
-                langfuse_client.flush()
-            except Exception as te:
-                logger.warning(f"TELEMETRY_ERROR | {te}")
+        # 6. Telemetry Logging (Async to Langfuse)
+        trace_rag_interaction(
+            user_id=employee_id,
+            session_id=session_id,
+            query_text=query,
+            response_text=response_text,
+            latency_ms=latency_ms,
+            cache_hit=False,
+            tokens_used=tokens_used,
+            retrieved_chunks=[d.page_content for d in top_docs],
+        )
 
-        logger.info(f"RAG_QUERY_SUCCESS | user={employee_id}")
+        logger.info(
+            f"RAG_QUERY_SUCCESS | user={employee_id} | latency={latency_ms:.1f}ms"
+        )
 
     except Exception as e:
         logger.exception(f"RAG_FATAL_ERROR | user={employee_id}")

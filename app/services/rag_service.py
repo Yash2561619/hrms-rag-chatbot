@@ -15,7 +15,10 @@ from rank_bm25 import BM25Okapi
 
 from app.services.memory_service import add_to_chat_history, get_chat_history
 from app.services.whatsapp_service import send_text
-
+from app.services.semantic_cache_service import (
+    get_semantic_cached_answer,
+    save_semantic_cached_answer,
+)
 logger = logging.getLogger(__name__)
 
 # Global index references cached in RAM
@@ -208,33 +211,45 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
 
   return fallback_text, citation_footer
 
-
 def handle_rag_query(employee, query: str, collection_unused, gemini_client):
-  """Handles end-to-end RAG query flow with card formatting."""
-  sender = employee["whatsapp"]
-  employee_id = employee.get("employee_id")
-  logger.info(f"RAG_QUERY_START | user={employee_id}")
+    """Handles end-to-end RAG query flow with Semantic Cache + Hybrid RAG."""
+    sender = employee["whatsapp"]
+    employee_id = employee.get("employee_id")
+    logger.info(f"RAG_QUERY_START | user={employee_id}")
 
-  try:
-    chat_history_str = get_chat_history(employee_id, max_messages=4)
-    expanded_queries = multi_query_expansion(query, gemini_client)
-    dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(
-        expanded_queries, top_k=6
-    )
+    try:
+        # =========================================================================
+        # 1. SEMANTIC CACHE PROBE (Sub-50ms Fast Path)
+        # =========================================================================
+        cached_response, cached_footer = get_semantic_cached_answer(query)
+        if cached_response:
+            add_to_chat_history(employee_id, query, cached_response)
+            final_whatsapp_msg = f"{cached_response}{cached_footer}"
+            send_text(sender, final_whatsapp_msg)
+            logger.info(f"RAG_QUERY_SUCCESS (FROM_CACHE) ⚡ | user={employee_id}")
+            return
 
-    if not all_retrieved:
-      send_text(
-          sender,
-          "❌ I couldn't find relevant information in the company policy"
-          " documents.",
-      )
-      return
+        # =========================================================================
+        # 2. FULL RAG RETRIEVAL (Only executed on Cache Miss)
+        # =========================================================================
+        chat_history_str = get_chat_history(employee_id, max_messages=4)
+        expanded_queries = multi_query_expansion(query, gemini_client)
+        dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(
+            expanded_queries, top_k=6
+        )
 
-    context, citation_footer, top_docs = math_rrf_rerank(
-        dense_docs, sparse_docs, top_k=3
-    )
+        if not all_retrieved:
+            send_text(
+                sender,
+                "❌ I couldn't find relevant information in the company policy documents.",
+            )
+            return
 
-    prompt = f"""You are an AI HR Assistant. Formulate your answer directly for WhatsApp reading as a structured card.
+        context, citation_footer, top_docs = math_rrf_rerank(
+            dense_docs, sparse_docs, top_k=3
+        )
+
+        prompt = f"""You are an AI HR Assistant. Formulate your answer directly for WhatsApp reading as a structured card.
 
 FORMATTING RULES:
 1. Start directly with the card header:
@@ -259,38 +274,40 @@ Employee Question:
 
 Card Response:"""
 
-    response_text = None
+        response_text = None
 
-    try:
-      response = gemini_client.models.generate_content(
-          model="gemini-2.5-flash",
-          contents=prompt,
-          config=types.GenerateContentConfig(
-              temperature=0.1,
-              max_output_tokens=700,
-              tools=[],
-          ),
-      )
-      if response and response.text:
-        response_text = response.text.strip()
-    except Exception as err:
-      logger.warning(f"LLM_GENERATION_FAILED | {err}")
+        try:
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    max_output_tokens=700,
+                    tools=[],
+                ),
+            )
+            if response and response.text:
+                response_text = response.text.strip()
+        except Exception as err:
+            logger.warning(f"LLM_GENERATION_FAILED | {err}")
 
-    if not response_text:
-      response_text, citation_footer = format_raw_chunks_fallback(all_retrieved)
+        if not response_text:
+            response_text, citation_footer = format_raw_chunks_fallback(all_retrieved)
 
-    if response_text:
-      add_to_chat_history(employee_id, query, response_text)
+        # 3. Save successful interaction to Chat Memory
+        if response_text:
+            add_to_chat_history(employee_id, query, response_text)
+            # 4. Save into Semantic Cache for future employees
+            save_semantic_cached_answer(query, response_text, citation_footer)
 
-    # Deliver final card-styled message
-    final_whatsapp_msg = f"{response_text}{citation_footer}"
-    send_text(sender, final_whatsapp_msg)
-    logger.info(f"RAG_QUERY_SUCCESS | user={employee_id}")
+        # 5. Deliver final response
+        final_whatsapp_msg = f"{response_text}{citation_footer}"
+        send_text(sender, final_whatsapp_msg)
+        logger.info(f"RAG_QUERY_SUCCESS | user={employee_id}")
 
-  except Exception as e:
-    logger.exception(f"RAG_FATAL_ERROR | user={employee_id}")
-    send_text(
-        sender,
-        "❌ An error occurred while retrieving policy details. Please try again"
-        " later.",
-    )
+    except Exception as e:
+        logger.exception(f"RAG_FATAL_ERROR | user={employee_id}")
+        send_text(
+            sender,
+            "❌ An error occurred while retrieving policy details. Please try again later.",
+        )

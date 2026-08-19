@@ -627,11 +627,23 @@ def delete_policy(filename):
     return redirect(url_for("admin.policy_management"))
 
 
-@admin_bp.route("/download-policy/<filename>")
-@admin_bp.route("/view-policy/<filename>")
+
+@admin_bp.route("/download-policy/<path:filename>")
+@login_required
+def download_policy(filename):
+    """Download policy file using presigned S3 URL."""
+    s3_key = f"policies/{filename}"
+    url = generate_presigned_url(s3_key)
+    return redirect(url)
+
+
+@admin_bp.route("/view-policy/<path:filename>")
 @login_required
 def view_policy(filename):
-    return redirect(generate_presigned_url(f"policies/{filename}"))
+    """View policy file in browser using presigned S3 URL."""
+    s3_key = f"policies/{filename}"
+    url = generate_presigned_url(s3_key)
+    return redirect(url)
 
 
 # =====================================================

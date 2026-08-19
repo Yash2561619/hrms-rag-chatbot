@@ -475,8 +475,11 @@ def bulk_upload_salary():
             job_timeout=600,
         )
 
+        # FIXED: Changed job.get_id() -> job.id
+        job_short_id = str(job.id)[:8] if job and job.id else "active"
+
         flash(
-            f"⏳ Bulk salary processing queued in background! (Job ID: {job.get_id()[:8]})",
+            f"⏳ Bulk salary processing queued in background! (Job ID: {job_short_id})",
             "info",
         )
     except Exception as e:

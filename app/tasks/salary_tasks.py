@@ -1,8 +1,13 @@
+"""Background Task Worker for Bulk Salary Slip Processing.
+
+Location: app/tasks/salary_tasks.py
+"""
+
+from datetime import datetime
 import io
 import logging
 import os
 import zipfile
-from datetime import datetime
 from app.services.s3_service import upload_salary_to_s3
 from app.utils.pdf_security import (
     generate_salary_pdf_password,
@@ -73,7 +78,7 @@ def process_bulk_salary_slips_job(zip_bytes: bytes):
         success_count += 1
 
     log_activity(
-        f'📦 Bulk salary job finished: {success_count} uploaded,'
+        f'📦 Bulk salary job completed: {success_count} uploaded,'
         f' {skipped_count} skipped'
     )
     logger.info(

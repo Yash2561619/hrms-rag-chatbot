@@ -423,14 +423,23 @@ def upload_salary():
                 flash(f"❌ Employee {employee_id} not found", "danger")
                 return redirect(url_for("admin.upload_salary"))
 
-            emp_id = employee.get("employee_id") if isinstance(employee, dict) else employee[1]
-            phone_num = (
-                employee.get("whatsapp") or employee.get("phone")
-                if isinstance(employee, dict)
-                else employee[5]
-            )
+            # Safe extraction for both dict and tuple formats
+            if isinstance(employee, dict):
+                emp_id = employee.get("employee_id") or employee_id
+                phone_num = employee.get("whatsapp") or employee.get("phone") or "0000"
+            else:
+                # Handle tuple safely regardless of column count
+                emp_id = employee[0] if str(employee[0]).startswith("EMP") else (employee[1] if len(employee) > 1 else employee_id)
+                
+                # Extract phone: check index 2 (if 5-col row) or index 3/5
+                if len(employee) > 5:
+                    phone_num = employee[5]
+                elif len(employee) >= 3:
+                    phone_num = employee[2] if str(employee[2]).isdigit() else employee[3]
+                else:
+                    phone_num = "0000"
 
-            pdf_password = generate_salary_pdf_password(emp_id, phone_num)
+            pdf_password = generate_salary_pdf_password(emp_id, str(phone_num))
             file_bytes = file.read()
             encrypted_stream = protect_pdf_with_password(file_bytes, pdf_password)
 

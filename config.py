@@ -18,7 +18,8 @@ class Config:
 
     # Gemini
     GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-
+    UPSTASH_REDIS_REST_URL = os.environ.get("UPSTASH_REDIS_REST_URL")
+    UPSTASH_REDIS_REST_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
     # App
     BASE_URL = os.getenv(
         'BASE_URL',

@@ -6,18 +6,31 @@ Location: app/services/semantic_cache_service.py
 
 import json
 import logging
-import numpy as np
+import os
 from fastembed import TextEmbedding
+import numpy as np
 from upstash_redis import Redis
 from config import Config
 
 logger = logging.getLogger(__name__)
 
 # Initialize Upstash Redis & Embedding Model
-redis_client = Redis(
-    url=Config.UPSTASH_REDIS_REST_URL,
-    token=Config.UPSTASH_REDIS_REST_TOKEN
+REDIS_URL = getattr(Config, "UPSTASH_REDIS_REST_URL", None) or os.environ.get(
+    "UPSTASH_REDIS_REST_URL"
 )
+REDIS_TOKEN = getattr(
+    Config, "UPSTASH_REDIS_REST_TOKEN", None
+) or os.environ.get("UPSTASH_REDIS_REST_TOKEN")
+
+redis_client = None
+if REDIS_URL and REDIS_TOKEN:
+  try:
+    redis_client = Redis(url=REDIS_URL, token=REDIS_TOKEN)
+    logger.info("UPSTASH_REDIS_CLIENT_INITIALIZED ✅")
+  except Exception as e:
+    logger.error(f"UPSTASH_REDIS_INIT_FAILED | {e}")
+else:
+  logger.warning("UPSTASH_REDIS_ENV_VARS_MISSING | Semantic Cache disabled")
 
 # Lightweight embedding model (<60 MB RAM)
 embedder = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
@@ -26,84 +39,94 @@ SIMILARITY_THRESHOLD = 0.92  # 92% semantic similarity threshold
 
 
 def _get_embedding(text: str) -> list[float]:
-    """Generates normalized vector embedding."""
-    embeddings = list(embedder.embed([text.lower().strip()]))
-    vec = np.array(embeddings[0])
-    norm = np.linalg.norm(vec)
-    if norm > 0:
-        vec = vec / norm
-    return vec.tolist()
+  """Generates normalized vector embedding."""
+  embeddings = list(embedder.embed([text.lower().strip()]))
+  vec = np.array(embeddings[0])
+  norm = np.linalg.norm(vec)
+  if norm > 0:
+    vec = vec / norm
+  return vec.tolist()
 
 
 def get_semantic_cached_answer(query: str) -> tuple[str | None, str | None]:
-    """
-    Checks Upstash Redis for a semantically similar previous question.
-    Returns: (cached_response, cached_source_footer) or (None, None)
-    """
-    try:
-        # Fetch all cached entries from Redis (stored as a JSON list)
-        cached_raw = redis_client.get(CACHE_INDEX_KEY)
-        if not cached_raw:
-            return None, None
+  """Checks Upstash Redis for a semantically similar previous question.
 
-        cache_entries = json.loads(cached_raw)
-        if not cache_entries:
-            return None, None
+  Returns: (cached_response, cached_source_footer) or (None, None)
+  """
+  if not redis_client:
+    return None, None
 
-        query_vec = np.array(_get_embedding(query))
+  try:
+    # Fetch all cached entries from Redis (stored as a JSON list)
+    cached_raw = redis_client.get(CACHE_INDEX_KEY)
+    if not cached_raw:
+      return None, None
 
-        best_score = -1.0
-        best_entry = None
+    cache_entries = json.loads(cached_raw)
+    if not cache_entries:
+      return None, None
 
-        # Calculate Cosine Similarity across cached questions
-        for entry in cache_entries:
-            entry_vec = np.array(entry["vector"])
-            # Dot product of normalized vectors equals Cosine Similarity
-            score = float(np.dot(query_vec, entry_vec))
-            
-            if score > best_score:
-                best_score = score
-                best_entry = entry
+    query_vec = np.array(_get_embedding(query))
 
-        logger.info(f"SEMANTIC_CACHE_PROBE | score={best_score:.4f} | threshold={SIMILARITY_THRESHOLD}")
+    best_score = -1.0
+    best_entry = None
 
-        if best_score >= SIMILARITY_THRESHOLD and best_entry:
-            logger.info(f"SEMANTIC_CACHE_HIT ✅ | matched: '{best_entry['question']}' (score: {best_score:.3f})")
-            return best_entry["response"], best_entry.get("citation_footer", "")
+    # Calculate Cosine Similarity across cached questions
+    for entry in cache_entries:
+      entry_vec = np.array(entry["vector"])
+      # Dot product of normalized vectors equals Cosine Similarity
+      score = float(np.dot(query_vec, entry_vec))
 
-        return None, None
+      if score > best_score:
+        best_score = score
+        best_entry = entry
 
-    except Exception as e:
-        logger.warning(f"SEMANTIC_CACHE_READ_ERROR | {e}")
-        return None, None
+    logger.info(
+        f"SEMANTIC_CACHE_PROBE | score={best_score:.4f} |"
+        f" threshold={SIMILARITY_THRESHOLD}"
+    )
+
+    if best_score >= SIMILARITY_THRESHOLD and best_entry:
+      logger.info(
+          "SEMANTIC_CACHE_HIT ✅ | matched:"
+          f" '{best_entry['question']}' (score: {best_score:.3f})"
+      )
+      return best_entry["response"], best_entry.get("citation_footer", "")
+
+    return None, None
+
+  except Exception as e:
+    logger.warning(f"SEMANTIC_CACHE_READ_ERROR | {e}")
+    return None, None
 
 
-def save_semantic_cached_answer(query: str, response: str, citation_footer: str = ""):
-    """Saves newly generated Gemini policy answer into the semantic cache."""
-    try:
-        # Don't cache fallback errors or empty responses
-        if not response or "❌" in response:
-            return
+def save_semantic_cached_answer(
+    query: str, response: str, citation_footer: str = ""
+):
+  """Saves newly generated Gemini policy answer into the semantic cache."""
+  if not redis_client or not response or "❌" in response:
+    return
 
-        query_vec = _get_embedding(query)
-        
-        new_entry = {
-            "question": query.strip(),
-            "vector": query_vec,
-            "response": response.strip(),
-            "citation_footer": citation_footer
-        }
+  try:
+    query_vec = _get_embedding(query)
 
-        cached_raw = redis_client.get(CACHE_INDEX_KEY)
-        cache_entries = json.loads(cached_raw) if cached_raw else []
+    new_entry = {
+        "question": query.strip(),
+        "vector": query_vec,
+        "response": response.strip(),
+        "citation_footer": citation_footer,
+    }
 
-        # Keep the latest 200 most recent unique policy questions (prevents payload bloat)
-        cache_entries.insert(0, new_entry)
-        cache_entries = cache_entries[:200]
+    cached_raw = redis_client.get(CACHE_INDEX_KEY)
+    cache_entries = json.loads(cached_raw) if cached_raw else []
 
-        # Save back to Upstash Redis with 30-day TTL (2592000 seconds)
-        redis_client.set(CACHE_INDEX_KEY, json.dumps(cache_entries), ex=2592000)
-        logger.info(f"SEMANTIC_CACHE_SAVED ✅ | query='{query[:30]}...'")
+    # Keep the latest 200 most recent unique policy questions (prevents payload bloat)
+    cache_entries.insert(0, new_entry)
+    cache_entries = cache_entries[:200]
 
-    except Exception as e:
-        logger.warning(f"SEMANTIC_CACHE_WRITE_ERROR | {e}")
+    # Save back to Upstash Redis with 30-day TTL (2592000 seconds)
+    redis_client.set(CACHE_INDEX_KEY, json.dumps(cache_entries), ex=2592000)
+    logger.info(f"SEMANTIC_CACHE_SAVED ✅ | query='{query[:30]}...'")
+
+  except Exception as e:
+    logger.warning(f"SEMANTIC_CACHE_WRITE_ERROR | {e}")

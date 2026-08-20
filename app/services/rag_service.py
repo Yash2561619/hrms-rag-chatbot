@@ -83,7 +83,6 @@ Output format: Return ONLY the queries separated by newlines, no bullet points o
                 config=types.GenerateContentConfig(
                     temperature=0.2,
                     max_output_tokens=100,
-                    tools=[],
                 ),
             )
             variations = [
@@ -245,7 +244,6 @@ def execute_llm_with_backoff_failover(gemini_client, prompt: str) -> tuple[str, 
                 config=types.GenerateContentConfig(
                     temperature=0.1,
                     max_output_tokens=700,
-                    tools=[],
                 ),
             )
             if response and response.text:
@@ -321,6 +319,7 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
                 latency_ms=latency_ms,
                 cache_hit=True,
                 tokens_used={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                model_name="semantic_cache",
             )
             logger.info(
                 f"RAG_QUERY_SUCCESS (FROM_CACHE) ⚡ | user={employee_id} | latency={latency_ms:.1f}ms"
@@ -350,6 +349,7 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
                 cache_hit=False,
                 tokens_used={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
                 retrieved_chunks=[],
+                model_name="none",
             )
             return
 
@@ -410,6 +410,7 @@ Card Response:"""
             cache_hit=False,
             tokens_used=tokens_used,
             retrieved_chunks=[d.page_content for d in top_docs],
+            model_name=model_used,
         )
 
         logger.info(

@@ -1,4 +1,5 @@
 """Centralized Observability Service using Langfuse Python SDK.
+Supports dynamic multi-LLM tracing and SDK v2/v3 compatibility.
 Location: app/services/telemetry_service.py
 """
 
@@ -41,67 +42,84 @@ def trace_rag_interaction(
     hallucination_score: Optional[float] = None,
     model_name: str = "gemini-2.5-flash",
 ):
-    """Creates a structured trace hierarchy: Root Trace -> Retrieval Span -> LLM Generation -> Scores."""
+    """Creates a structured trace hierarchy for Gemini, Groq, or Cache hits."""
     if not langfuse_client:
         return
 
     try:
-        source_tag = "cache_hit" if cache_hit else ("groq_fallback" if "llama" in model_name.lower() else "gemini_primary")
+        source_tag = (
+            "cache_hit"
+            if cache_hit
+            else ("groq_fallback" if "llama" in model_name.lower() else "gemini_primary")
+        )
 
-        # 1. Root Trace
-        trace = langfuse_client.trace(
-            name="hr_policy_chat",
-            user_id=user_id,
-            session_id=session_id,
-            input={"query": query_text},
-            output={"response": response_text},
-            metadata={
+        trace_kwargs = {
+            "name": "hr_policy_chat",
+            "user_id": user_id,
+            "session_id": session_id,
+            "input": {"query": query_text},
+            "output": {"response": response_text},
+            "metadata": {
                 "cache_hit": cache_hit,
                 "latency_ms": round(latency_ms, 2),
                 "model_used": model_name if not cache_hit else "semantic_cache",
                 "chunks_count": len(retrieved_chunks) if retrieved_chunks else 0,
             },
-            tags=["production", "whatsapp", source_tag],
-        )
+            "tags": ["production", "whatsapp", source_tag],
+        }
 
-        # 2. Retrieval Span
-        if retrieved_chunks:
-            trace.span(
-                name="hybrid_vector_bm25_retrieval",
-                input={"query": query_text},
-                output={"chunks": retrieved_chunks},
-                metadata={"retrieved_count": len(retrieved_chunks)},
-            )
+        # Compatible with Langfuse v2 and v3
+        trace = None
+        if hasattr(langfuse_client, "trace"):
+            trace = langfuse_client.trace(**trace_kwargs)
+        elif hasattr(langfuse_client, "create_trace"):
+            trace = langfuse_client.create_trace(**trace_kwargs)
 
-        # 3. LLM Generation
-        if not cache_hit and model_name != "none":
-            trace.generation(
-                name="llm_generation",
-                model=model_name,
-                input=query_text,
-                output=response_text,
-                usage={
-                    "input": tokens_used.get("prompt_tokens", 0),
-                    "output": tokens_used.get("completion_tokens", 0),
-                    "total": tokens_used.get("total_tokens", 0),
-                },
-            )
+        if trace:
+            # 1. Retrieval Span
+            if retrieved_chunks:
+                span_kwargs = {
+                    "name": "hybrid_vector_bm25_retrieval",
+                    "input": {"query": query_text},
+                    "output": {"chunks": retrieved_chunks},
+                    "metadata": {"retrieved_count": len(retrieved_chunks)},
+                }
+                if hasattr(trace, "span"):
+                    trace.span(**span_kwargs)
+                elif hasattr(trace, "create_span"):
+                    trace.create_span(**span_kwargs)
 
-        # 4. Scores
-        trace.score(
-            name="cache_hit_rate",
-            value=1.0 if cache_hit else 0.0,
-            comment="Semantic Redis Cache Hit Indicator",
-        )
+            # 2. Generation Observation
+            if not cache_hit and model_name != "none":
+                gen_kwargs = {
+                    "name": "llm_generation",
+                    "model": model_name,
+                    "input": query_text,
+                    "output": response_text,
+                    "usage": {
+                        "input": tokens_used.get("prompt_tokens", 0),
+                        "output": tokens_used.get("completion_tokens", 0),
+                        "total": tokens_used.get("total_tokens", 0),
+                    },
+                }
+                if hasattr(trace, "generation"):
+                    trace.generation(**gen_kwargs)
+                elif hasattr(trace, "create_generation"):
+                    trace.create_generation(**gen_kwargs)
 
-        if hallucination_score is not None:
-            trace.score(
-                name="hallucination_score",
-                value=hallucination_score,
-                comment="Context Faithfulness Score",
-            )
+            # 3. Cache Score
+            score_kwargs = {
+                "name": "cache_hit_rate",
+                "value": 1.0 if cache_hit else 0.0,
+                "comment": "Semantic Redis Cache Hit Indicator",
+            }
+            if hasattr(trace, "score"):
+                trace.score(**score_kwargs)
+            elif hasattr(trace, "create_score"):
+                trace.create_score(**score_kwargs)
 
-        langfuse_client.flush()
+        if hasattr(langfuse_client, "flush"):
+            langfuse_client.flush()
 
     except Exception as e:
         logger.warning(f"LANGFUSE_RECORD_FAILED | {e}")

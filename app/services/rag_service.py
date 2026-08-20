@@ -264,31 +264,36 @@ def execute_llm_with_backoff_failover(gemini_client, prompt: str) -> tuple[str, 
     # ---------------------------------------------------------
     # Tier 2: Groq LLaMA-3.3-70B (Secondary Failover)
     # ---------------------------------------------------------
+    # ---------------------------------------------------------
+    # Tier 2: Groq (Secondary Failover)
+    # ---------------------------------------------------------
     if groq_client:
-        for attempt in range(2):
-            try:
-                logger.info("ROUTING_TO_SECONDARY_LLM | groq/llama-3.3-70b-versatile ⚡")
-                chat_completion = groq_client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.1,
-                    max_tokens=700,
-                )
-                content = chat_completion.choices[0].message.content.strip()
-                usage = chat_completion.usage
-                tokens_used = {
-                    "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                    "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
-                    "total_tokens": getattr(usage, "total_tokens", 0) or 0,
-                }
-                return content, tokens_used, "llama-3.3-70b-versatile"
-            except Exception as groq_err:
-                jitter = random.uniform(0.1, 0.3)
-                sleep_duration = (0.4 * (2 ** attempt)) + jitter
-                logger.warning(f"GROQ_ATTEMPT_{attempt+1}_FAILED | {groq_err}")
-                time.sleep(sleep_duration)
-
-    return None, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, "none"
+      fallback_model = (
+          "llama-3.1-70b-versatile"  # or "llama-3.1-8b-instant" for 200ms
+                                     # responses
+      )
+      for attempt in range(2):
+        try:
+          logger.info(f"ROUTING_TO_SECONDARY_LLM | groq/{fallback_model} ⚡")
+          chat_completion = groq_client.chat.completions.create(
+              model=fallback_model,
+              messages=[{"role": "user", "content": prompt}],
+              temperature=0.1,
+              max_tokens=700,
+          )
+          content = chat_completion.choices[0].message.content.strip()
+          usage = chat_completion.usage
+          tokens_used = {
+              "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+              "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+              "total_tokens": getattr(usage, "total_tokens", 0) or 0,
+          }
+          return content, tokens_used, fallback_model
+        except Exception as groq_err:
+          jitter = random.uniform(0.1, 0.3)
+          sleep_duration = (0.4 * (2**attempt)) + jitter
+          logger.warning(f"GROQ_ATTEMPT_{attempt+1}_FAILED | {groq_err}")
+          time.sleep(sleep_duration)
 
 
 def handle_rag_query(employee, query: str, collection_unused, gemini_client):

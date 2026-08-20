@@ -1,5 +1,4 @@
 """Centralized Observability Service using Langfuse Python SDK.
-Supports dynamic multi-LLM tracing (Gemini + Groq).
 Location: app/services/telemetry_service.py
 """
 
@@ -42,23 +41,15 @@ def trace_rag_interaction(
     hallucination_score: Optional[float] = None,
     model_name: str = "gemini-2.5-flash",
 ):
-    """Creates a structured trace hierarchy for Gemini, Groq, or Cache hits."""
+    """Creates a structured trace hierarchy: Root Trace -> Retrieval Span -> LLM Generation -> Scores."""
     if not langfuse_client:
         return
 
     try:
-        # Determine execution tag
-        if cache_hit:
-            source_tag = "cache_hit"
-        elif "llama" in model_name.lower():
-            source_tag = "groq_fallback"
-        elif "gemini" in model_name.lower():
-            source_tag = "gemini_primary"
-        else:
-            source_tag = "extractive_fallback"
+        source_tag = "cache_hit" if cache_hit else ("groq_fallback" if "llama" in model_name.lower() else "gemini_primary")
 
         # 1. Root Trace
-        trace = langfuse_client.create_trace(
+        trace = langfuse_client.trace(
             name="hr_policy_chat",
             user_id=user_id,
             session_id=session_id,
@@ -75,18 +66,17 @@ def trace_rag_interaction(
 
         # 2. Retrieval Span
         if retrieved_chunks:
-            trace.create_span(
+            trace.span(
                 name="hybrid_vector_bm25_retrieval",
                 input={"query": query_text},
                 output={"chunks": retrieved_chunks},
                 metadata={"retrieved_count": len(retrieved_chunks)},
             )
 
-        # 3. LLM Generation (Captures either Gemini or Groq tokens & model ID)
+        # 3. LLM Generation
         if not cache_hit and model_name != "none":
-            generation_name = "groq_generation" if "llama" in model_name.lower() else "gemini_generation"
-            trace.create_generation(
-                name=generation_name,
+            trace.generation(
+                name="llm_generation",
                 model=model_name,
                 input=query_text,
                 output=response_text,
@@ -97,16 +87,15 @@ def trace_rag_interaction(
                 },
             )
 
-        # 4. Cache Hit Metric Score
-        trace.create_score(
+        # 4. Scores
+        trace.score(
             name="cache_hit_rate",
             value=1.0 if cache_hit else 0.0,
             comment="Semantic Redis Cache Hit Indicator",
         )
 
-        # 5. Hallucination Metric Score
         if hallucination_score is not None:
-            trace.create_score(
+            trace.score(
                 name="hallucination_score",
                 value=hallucination_score,
                 comment="Context Faithfulness Score",

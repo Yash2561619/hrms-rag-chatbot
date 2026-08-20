@@ -231,10 +231,10 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
 def execute_llm_with_backoff_failover(
     gemini_client, prompt: str
 ) -> Tuple[Optional[str], dict, str]:
-    """Cascading Execution: Gemini 2.5 Flash -> Groq (llama-3.1-8b-instant) with Exponential Backoff + Jitter."""
+    """Cascading Execution: Gemini 2.5 Flash -> Groq (Multi-model cascade) with Jittered Backoff."""
 
     # ---------------------------------------------------------
-    # Tier 1: Gemini 2.5 Flash (Primary) with Jittered Backoff
+    # Tier 1: Gemini 2.5 Flash (Primary)
     # ---------------------------------------------------------
     max_retries = 2
     base_delay = 0.5
@@ -265,15 +265,21 @@ def execute_llm_with_backoff_failover(
             time.sleep(sleep_duration)
 
     # ---------------------------------------------------------
-    # Tier 2: Groq (Secondary Failover - llama-3.1-8b-instant)
+    # Tier 2: Groq Multi-Model Failover
+    # Iterates across active production endpoints
     # ---------------------------------------------------------
     if groq_client:
-        fallback_model = "llama-3.1-8b-instant"
-        for attempt in range(2):
+        candidate_models = [
+            "llama-3.3-70b-versatile",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it",
+        ]
+        
+        for model_id in candidate_models:
             try:
-                logger.info(f"ROUTING_TO_SECONDARY_LLM | groq/{fallback_model} ⚡")
+                logger.info(f"ROUTING_TO_SECONDARY_LLM | groq/{model_id} ⚡")
                 chat_completion = groq_client.chat.completions.create(
-                    model=fallback_model,
+                    model=model_id,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.1,
                     max_tokens=700,
@@ -285,14 +291,11 @@ def execute_llm_with_backoff_failover(
                     "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
                     "total_tokens": getattr(usage, "total_tokens", 0) or 0,
                 }
-                return content, tokens_used, fallback_model
+                return content, tokens_used, model_id
             except Exception as groq_err:
-                jitter = random.uniform(0.1, 0.3)
-                sleep_duration = (0.4 * (2 ** attempt)) + jitter
-                logger.warning(f"GROQ_ATTEMPT_{attempt+1}_FAILED | {groq_err}")
-                time.sleep(sleep_duration)
+                logger.warning(f"GROQ_MODEL_{model_id}_FAILED | {groq_err}")
+                continue
 
-    # Return safe 3-tuple to avoid unpacking errors when both providers fail
     return None, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, "none"
 
 

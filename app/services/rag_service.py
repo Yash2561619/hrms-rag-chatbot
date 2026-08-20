@@ -11,6 +11,7 @@ import os
 import random
 import re
 import time
+from typing import Optional, Tuple
 from google.genai import types
 from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -227,9 +228,11 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
     return fallback_text, citation_footer
 
 
-def execute_llm_with_backoff_failover(gemini_client, prompt: str) -> tuple[str, dict, str]:
-    """Cascading Execution: Gemini 2.5 Flash -> Groq LLaMA-3.3-70B with Exponential Backoff + Jitter."""
-    
+def execute_llm_with_backoff_failover(
+    gemini_client, prompt: str
+) -> Tuple[Optional[str], dict, str]:
+    """Cascading Execution: Gemini 2.5 Flash -> Groq (llama-3.1-8b-instant) with Exponential Backoff + Jitter."""
+
     # ---------------------------------------------------------
     # Tier 1: Gemini 2.5 Flash (Primary) with Jittered Backoff
     # ---------------------------------------------------------
@@ -262,38 +265,35 @@ def execute_llm_with_backoff_failover(gemini_client, prompt: str) -> tuple[str, 
             time.sleep(sleep_duration)
 
     # ---------------------------------------------------------
-    # Tier 2: Groq LLaMA-3.3-70B (Secondary Failover)
-    # ---------------------------------------------------------
-    # ---------------------------------------------------------
-    # Tier 2: Groq (Secondary Failover)
+    # Tier 2: Groq (Secondary Failover - llama-3.1-8b-instant)
     # ---------------------------------------------------------
     if groq_client:
-      fallback_model = (
-          "llama-3.1-70b-versatile"  # or "llama-3.1-8b-instant" for 200ms
-                                     # responses
-      )
-      for attempt in range(2):
-        try:
-          logger.info(f"ROUTING_TO_SECONDARY_LLM | groq/{fallback_model} ⚡")
-          chat_completion = groq_client.chat.completions.create(
-              model=fallback_model,
-              messages=[{"role": "user", "content": prompt}],
-              temperature=0.1,
-              max_tokens=700,
-          )
-          content = chat_completion.choices[0].message.content.strip()
-          usage = chat_completion.usage
-          tokens_used = {
-              "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-              "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
-              "total_tokens": getattr(usage, "total_tokens", 0) or 0,
-          }
-          return content, tokens_used, fallback_model
-        except Exception as groq_err:
-          jitter = random.uniform(0.1, 0.3)
-          sleep_duration = (0.4 * (2**attempt)) + jitter
-          logger.warning(f"GROQ_ATTEMPT_{attempt+1}_FAILED | {groq_err}")
-          time.sleep(sleep_duration)
+        fallback_model = "llama-3.1-8b-instant"
+        for attempt in range(2):
+            try:
+                logger.info(f"ROUTING_TO_SECONDARY_LLM | groq/{fallback_model} ⚡")
+                chat_completion = groq_client.chat.completions.create(
+                    model=fallback_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=700,
+                )
+                content = chat_completion.choices[0].message.content.strip()
+                usage = chat_completion.usage
+                tokens_used = {
+                    "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                    "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+                    "total_tokens": getattr(usage, "total_tokens", 0) or 0,
+                }
+                return content, tokens_used, fallback_model
+            except Exception as groq_err:
+                jitter = random.uniform(0.1, 0.3)
+                sleep_duration = (0.4 * (2 ** attempt)) + jitter
+                logger.warning(f"GROQ_ATTEMPT_{attempt+1}_FAILED | {groq_err}")
+                time.sleep(sleep_duration)
+
+    # Return safe 3-tuple to avoid unpacking errors when both providers fail
+    return None, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, "none"
 
 
 def handle_rag_query(employee, query: str, collection_unused, gemini_client):

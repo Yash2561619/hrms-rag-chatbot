@@ -255,10 +255,21 @@ def get_active_groq_model() -> Optional[str]:
         return "llama-3.1-8b-instant"
 
 
+def clean_reasoning_tags(text: str) -> str:
+    """Strips internal Chain-of-Thought (<think>...</think>) tags from reasoning models."""
+    if not text:
+        return ""
+    # Remove everything between <think> and </think>
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    # Fallback if closing tag was truncated
+    cleaned = re.sub(r"<think>.*", "", cleaned, flags=re.DOTALL)
+    return cleaned.strip()
+
+
 def execute_llm_with_backoff_failover(
     gemini_client, prompt: str
 ) -> Tuple[Optional[str], dict, str]:
-    """Cascading Execution: Gemini 2.5 Flash -> Dynamic Groq Failover with Jittered Backoff."""
+    """Cascading Execution: Gemini 2.5 Flash -> Dynamic Groq Failover with Thinking Tag Filter."""
 
     # ---------------------------------------------------------
     # Tier 1: Gemini 2.5 Flash (Primary)
@@ -282,7 +293,8 @@ def execute_llm_with_backoff_failover(
                     "completion_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) or 0,
                     "total_tokens": getattr(response.usage_metadata, "total_token_count", 0) or 0,
                 }
-                return response.text.strip(), tokens_used, "gemini-2.5-flash"
+                clean_text = clean_reasoning_tags(response.text)
+                return clean_text, tokens_used, "gemini-2.5-flash"
         except Exception as err:
             jitter = random.uniform(0.1, 0.4)
             sleep_duration = (base_delay * (2 ** attempt)) + jitter
@@ -292,7 +304,7 @@ def execute_llm_with_backoff_failover(
             time.sleep(sleep_duration)
 
     # ---------------------------------------------------------
-    # Tier 2: Dynamic Groq Failover
+    # Tier 2: Dynamic Groq Failover (Stripping <think> Tags)
     # ---------------------------------------------------------
     if groq_client:
         selected_model = get_active_groq_model()
@@ -306,14 +318,16 @@ def execute_llm_with_backoff_failover(
                         temperature=0.1,
                         max_tokens=700,
                     )
-                    content = chat_completion.choices[0].message.content.strip()
+                    raw_content = chat_completion.choices[0].message.content or ""
+                    clean_content = clean_reasoning_tags(raw_content)
+                    
                     usage = chat_completion.usage
                     tokens_used = {
                         "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
                         "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
                         "total_tokens": getattr(usage, "total_tokens", 0) or 0,
                     }
-                    return content, tokens_used, selected_model
+                    return clean_content, tokens_used, selected_model
                 except Exception as groq_err:
                     jitter = random.uniform(0.1, 0.3)
                     sleep_duration = (0.4 * (2 ** attempt)) + jitter

@@ -70,7 +70,7 @@ def load_indexes():
 
 
 def multi_query_expansion(query: str, gemini_client) -> list[str]:
-    """Generates 2 query variations to improve search recall with deterministic zero-temp backoff."""
+    """Generates 2 query variations to improve search recall with diverse synonym generation."""
     prompt = f"""Generate 2 alternative search queries for an HR policy search.
 Original Query: "{query}"
 Output format: Return ONLY the queries separated by newlines, no bullet points or extra text."""
@@ -80,8 +80,9 @@ Output format: Return ONLY the queries separated by newlines, no bullet points o
                 model="gemini-2.5-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.0,
+                    temperature=0.5,
                     max_output_tokens=60,
+                    top_p=0.9,
                 ),
             )
             variations = [
@@ -237,7 +238,7 @@ def clean_reasoning_and_artifacts(text: str) -> str:
     elif "<think>" in text:
         text = text.replace("<think>", "").strip()
 
-    # 2. Collapse repetitive horizontal lines
+    # 2. Collapse repetitive horizontal lines (properly escaped hyphen)
     cleaned = re.sub(r"[━─\-]{10,}", "━━━━━━━━━━━━━━━━━━━", text)
     return cleaned.strip()
 
@@ -250,7 +251,7 @@ def get_active_groq_model() -> Optional[str]:
         models = groq_client.models.list()
         active_ids = [m.id for m in models.data]
         
-        # Priority order based on your account's free tier limits
+        # Priority order matching your free tier limits
         preferred_order = [
             "openai/gpt-oss-120b",
             "openai/gpt-oss-20b",
@@ -263,7 +264,7 @@ def get_active_groq_model() -> Optional[str]:
             if pref in active_ids:
                 return pref
                 
-        # Safe fallback to any text generation model (excluding whisper/guard)
+        # Safe fallback to any text generation model (excluding whisper/guard/orpheus)
         text_models = [
             m.id for m in models.data 
             if not any(x in m.id.lower() for x in ["whisper", "guard", "orpheus"])
@@ -299,8 +300,10 @@ def execute_llm_with_backoff_failover(
                 model="gemini-2.5-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.1,
-                    max_output_tokens=350,
+                    temperature=0.2,
+                    max_output_tokens=500,
+                    top_p=0.85,
+                    top_k=40,
                 ),
             )
             if response and response.text:
@@ -332,8 +335,9 @@ def execute_llm_with_backoff_failover(
                     chat_completion = groq_client.chat.completions.create(
                         model=selected_model,
                         messages=[{"role": "user", "content": prompt}],
-                        temperature=0.1,
-                        max_tokens=350,
+                        temperature=0.2,
+                        max_tokens=450,
+                        top_p=0.8,
                     )
                     raw_content = chat_completion.choices[0].message.content or ""
                     cleaned_content = clean_reasoning_and_artifacts(raw_content)
@@ -423,27 +427,29 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
             dense_docs, sparse_docs, top_k=3
         )
 
-        prompt = f"""You are an AI HR Assistant. Formulate your answer directly for WhatsApp reading as a structured card.
+        prompt = f"""You are an AI HR Assistant. Formulate your answer as a structured policy card for WhatsApp.
 
-FORMATTING RULES:
-1. Start directly with the card header:
-📋 *Policy Information*
-━━━━━━━━━━━━━━━━━━━
-2. Do NOT write conversational fluff, pleasantries, or preamble sentences like "Here is a summary...", "Based on the policy...", "According to...".
-3. Use bullet points (•) with bold category labels (e.g., • *Permanent Employee:* 60 Days notice).
-4. Group related points under bold section headers with emojis (e.g., 📌 *Notice Periods:*, 📌 *Important Guidelines:*).
-5. Never leave sentences unfinished or truncated.
-6. If the context does not contain the answer, reply ONLY with:
-❌ This information is not covered in our official policy documents.
+STRICT FORMATTING RULES:
+1. Header: Always start directly with "📋 *Policy Information*" followed by divider "━━━━━━━━━━━━━━━━━━━".
+2. Bullets: Output a MAXIMUM of 4 complete bullets using this exact format:
+   • *Category:* Clear, complete description ending with a period.
+   ✗ BAD (truncated/messy): * *Fines, parking violations, or traffic penalties
+   ✓ GOOD (complete): • *Fines & Penalties:* Fines and traffic violations are not reimbursable.
+3. Section Headers: Group related items under bold headers with emojis (e.g., 📌 *Non-Reimbursable Expenses:*).
+4. No Fluff: Do NOT write "Here is a summary...", "Based on the policy...", or citations/sources. Jump straight to the structured content.
+5. Fallback: If the policy context doesn't answer the question, respond ONLY with:
+   "❌ This information is not covered in our official policy documents."
 
 ---
-Conversation History:
+RECENT CHAT HISTORY:
 {chat_history_str}
+
 ---
-HR Policy Context:
+RELEVANT HR POLICY EXCERPTS:
 {context}
+
 ---
-Employee Question:
+EMPLOYEE QUESTION:
 {query}
 
 Card Response:"""

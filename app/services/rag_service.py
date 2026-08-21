@@ -229,15 +229,24 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
 
 
 def clean_reasoning_and_artifacts(text: str) -> str:
-    """Strips <think> tags and excessive repeated divider artifacts."""
+    """Strips <think> tags and excessive repeated divider artifacts safely."""
     if not text:
         return ""
     # Strip thinking blocks
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     cleaned = re.sub(r"<think>.*", "", cleaned, flags=re.DOTALL)
-    # Collapse repetitive horizontal lines
-    cleaned = re.sub(r"[━─-]{10,}", "━━━━━━━━━━━━━━━━━━━", cleaned)
+    # Collapse repetitive horizontal lines (properly escaped hyphen)
+    cleaned = re.sub(r"[━─\-]{10,}", "━━━━━━━━━━━━━━━━━━━", cleaned)
     return cleaned.strip()
+
+
+def is_valid_hr_response(text: str) -> bool:
+    """Validates that the generated response actually contains policy text."""
+    if not text or len(text.strip()) < 40:
+        return False
+    # Properly escaped characters inside the regex class
+    meaningful_text = re.sub(r"[📋📌•\s━─\-*]+", "", text)
+    return len(meaningful_text) > 30
 
 
 def get_active_groq_model() -> Optional[str]:
@@ -268,13 +277,6 @@ def get_active_groq_model() -> Optional[str]:
         logger.warning(f"GROQ_MODEL_DISCOVERY_FAILED | {e}")
         return "llama-3.1-8b-instant"
 
-
-def is_valid_hr_response(text: str) -> bool:
-    """Validates that the generated response actually contains policy text."""
-    if not text or len(text.strip()) < 40:
-        return False
-    meaningful_text = re.sub(r"[📋📌•\s━─-*]+", "", text)
-    return len(meaningful_text) > 30
 
 
 def execute_llm_with_backoff_failover(

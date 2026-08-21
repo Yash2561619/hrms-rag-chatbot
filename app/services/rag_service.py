@@ -300,8 +300,8 @@ def execute_llm_with_backoff_failover(
                 model="gemini-2.5-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.2,
-                    max_output_tokens=500,
+                    temperature=0.4,
+                    max_output_tokens=700,
                     top_p=0.85,
                     top_k=40,
                 ),
@@ -335,8 +335,8 @@ def execute_llm_with_backoff_failover(
                     chat_completion = groq_client.chat.completions.create(
                         model=selected_model,
                         messages=[{"role": "user", "content": prompt}],
-                        temperature=0.2,
-                        max_tokens=450,
+                        temperature=0.4,
+                        max_tokens=700,
                         top_p=0.8,
                     )
                     raw_content = chat_completion.choices[0].message.content or ""

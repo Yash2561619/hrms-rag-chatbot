@@ -1,8 +1,8 @@
 """Advanced RAG Service for HR Policy Queries.
 
 Includes Query Expansion, Hybrid FAISS + BM25 Search, Math RRF Re-Ranking,
-Semantic Redis Caching, Exponential Backoff with Jitter, Multi-LLM Failover (Gemini -> Groq),
-Clean Cache Guard (No Fallback Pollution), and Langfuse Production Observability.
+Semantic Redis Caching, Exponential Backoff with Jitter, Dynamic Groq Failover,
+Artifact/Reasoning Stripping, Clean Cache Guard, and Langfuse Observability.
 Location: app/services/rag_service.py
 """
 
@@ -228,48 +228,59 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
     return fallback_text, citation_footer
 
 
+def clean_reasoning_and_artifacts(text: str) -> str:
+    """Strips <think> tags and excessive repeated divider artifacts."""
+    if not text:
+        return ""
+    # Strip thinking blocks
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    cleaned = re.sub(r"<think>.*", "", cleaned, flags=re.DOTALL)
+    # Collapse repetitive horizontal lines
+    cleaned = re.sub(r"[━─-]{10,}", "━━━━━━━━━━━━━━━━━━━", cleaned)
+    return cleaned.strip()
+
+
 def get_active_groq_model() -> Optional[str]:
-    """Dynamically identifies the best active text model on Groq."""
+    """Dynamically identifies the best active English-capable general text model on Groq."""
     if not groq_client:
         return None
     try:
         models = groq_client.models.list()
-        active_ids = [m.id for m in models.data if "whisper" not in m.id.lower() and "guard" not in m.id.lower()]
+        # Exclude audio, guard, and non-English/specialized models
+        active_ids = [
+            m.id for m in models.data 
+            if not any(x in m.id.lower() for x in ["whisper", "guard", "allam", "vision"])
+        ]
         
-        # Priority preferences among active models
         preferred_order = [
             "llama-3.3-70b-versatile",
-            "llama-3.3-70b-specdec",
             "llama-3.1-8b-instant",
             "llama3-70b-8192",
             "llama3-8b-8192",
             "qwen-2.5-32b",
-            "deepseek-r1-distill-llama-70b"
+            "deepseek-r1-distill-llama-70b",
         ]
         for pref in preferred_order:
             if pref in active_ids:
                 return pref
-        return active_ids[0] if active_ids else None
+        return active_ids[0] if active_ids else "llama-3.1-8b-instant"
     except Exception as e:
         logger.warning(f"GROQ_MODEL_DISCOVERY_FAILED | {e}")
         return "llama-3.1-8b-instant"
 
 
-def clean_reasoning_tags(text: str) -> str:
-    """Strips internal Chain-of-Thought (<think>...</think>) tags from reasoning models."""
-    if not text:
-        return ""
-    # Remove everything between <think> and </think>
-    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    # Fallback if closing tag was truncated
-    cleaned = re.sub(r"<think>.*", "", cleaned, flags=re.DOTALL)
-    return cleaned.strip()
+def is_valid_hr_response(text: str) -> bool:
+    """Validates that the generated response actually contains policy text."""
+    if not text or len(text.strip()) < 40:
+        return False
+    meaningful_text = re.sub(r"[📋📌•\s━─-*]+", "", text)
+    return len(meaningful_text) > 30
 
 
 def execute_llm_with_backoff_failover(
     gemini_client, prompt: str
 ) -> Tuple[Optional[str], dict, str]:
-    """Cascading Execution: Gemini 2.5 Flash -> Dynamic Groq Failover with Thinking Tag Filter."""
+    """Cascading Execution: Gemini 2.5 Flash -> Groq with Output Quality Guard."""
 
     # ---------------------------------------------------------
     # Tier 1: Gemini 2.5 Flash (Primary)
@@ -284,17 +295,18 @@ def execute_llm_with_backoff_failover(
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.1,
-                    max_output_tokens=700,
+                    max_output_tokens=1024,
                 ),
             )
             if response and response.text:
-                tokens_used = {
-                    "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) or 0,
-                    "completion_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) or 0,
-                    "total_tokens": getattr(response.usage_metadata, "total_token_count", 0) or 0,
-                }
-                clean_text = clean_reasoning_tags(response.text)
-                return clean_text, tokens_used, "gemini-2.5-flash"
+                cleaned_text = clean_reasoning_and_artifacts(response.text)
+                if is_valid_hr_response(cleaned_text):
+                    tokens_used = {
+                        "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) or 0,
+                        "completion_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) or 0,
+                        "total_tokens": getattr(response.usage_metadata, "total_token_count", 0) or 0,
+                    }
+                    return cleaned_text, tokens_used, "gemini-2.5-flash"
         except Exception as err:
             jitter = random.uniform(0.1, 0.4)
             sleep_duration = (base_delay * (2 ** attempt)) + jitter
@@ -304,7 +316,7 @@ def execute_llm_with_backoff_failover(
             time.sleep(sleep_duration)
 
     # ---------------------------------------------------------
-    # Tier 2: Dynamic Groq Failover (Stripping <think> Tags)
+    # Tier 2: Filtered Groq Failover
     # ---------------------------------------------------------
     if groq_client:
         selected_model = get_active_groq_model()
@@ -316,18 +328,21 @@ def execute_llm_with_backoff_failover(
                         model=selected_model,
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0.1,
-                        max_tokens=700,
+                        max_tokens=1024,
                     )
                     raw_content = chat_completion.choices[0].message.content or ""
-                    clean_content = clean_reasoning_tags(raw_content)
+                    cleaned_content = clean_reasoning_and_artifacts(raw_content)
                     
-                    usage = chat_completion.usage
-                    tokens_used = {
-                        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                        "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
-                        "total_tokens": getattr(usage, "total_tokens", 0) or 0,
-                    }
-                    return clean_content, tokens_used, selected_model
+                    if is_valid_hr_response(cleaned_content):
+                        usage = chat_completion.usage
+                        tokens_used = {
+                            "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                            "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+                            "total_tokens": getattr(usage, "total_tokens", 0) or 0,
+                        }
+                        return cleaned_content, tokens_used, selected_model
+                    else:
+                        logger.warning(f"GROQ_OUTPUT_INVALID_OR_EMPTY ({selected_model})")
                 except Exception as groq_err:
                     jitter = random.uniform(0.1, 0.3)
                     sleep_duration = (0.4 * (2 ** attempt)) + jitter
@@ -335,6 +350,7 @@ def execute_llm_with_backoff_failover(
                     time.sleep(sleep_duration)
 
     return None, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, "none"
+
 
 def handle_rag_query(employee, query: str, collection_unused, gemini_client):
     """Handles end-to-end RAG query flow with Semantic Cache, Hybrid RAG, Multi-LLM Failover, and Langfuse Tracing."""

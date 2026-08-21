@@ -70,20 +70,18 @@ def load_indexes():
 
 
 def multi_query_expansion(query: str, gemini_client) -> list[str]:
-    """Generates 2 query variations to improve search recall with quick exponential backoff."""
-    prompt = f"""
-Generate 2 alternative search queries for an HR policy search.
+    """Generates 2 query variations to improve search recall with deterministic zero-temp backoff."""
+    prompt = f"""Generate 2 alternative search queries for an HR policy search.
 Original Query: "{query}"
-Output format: Return ONLY the queries separated by newlines, no bullet points or extra text.
-"""
+Output format: Return ONLY the queries separated by newlines, no bullet points or extra text."""
     for attempt in range(2):
         try:
             res = gemini_client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.2,
-                    max_output_tokens=100,
+                    temperature=0.0,
+                    max_output_tokens=60,
                 ),
             )
             variations = [
@@ -232,57 +230,62 @@ def clean_reasoning_and_artifacts(text: str) -> str:
     """Strips <think> tags and excessive repeated divider artifacts safely."""
     if not text:
         return ""
-    # Strip thinking blocks
-    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    cleaned = re.sub(r"<think>.*", "", cleaned, flags=re.DOTALL)
-    # Collapse repetitive horizontal lines (properly escaped hyphen)
-    cleaned = re.sub(r"[━─\-]{10,}", "━━━━━━━━━━━━━━━━━━━", cleaned)
+    
+    # 1. Strip think blocks cleanly
+    if "</think>" in text:
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    elif "<think>" in text:
+        text = text.replace("<think>", "").strip()
+
+    # 2. Collapse repetitive horizontal lines
+    cleaned = re.sub(r"[━─\-]{10,}", "━━━━━━━━━━━━━━━━━━━", text)
     return cleaned.strip()
+
+
+def get_active_groq_model() -> Optional[str]:
+    """Identifies the best available model on your active Groq free plan."""
+    if not groq_client:
+        return None
+    try:
+        models = groq_client.models.list()
+        active_ids = [m.id for m in models.data]
+        
+        # Priority order based on your account's free tier limits
+        preferred_order = [
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "groq/compound-mini",
+            "groq/compound",
+            "qwen/qwen3.6-27b"
+        ]
+        
+        for pref in preferred_order:
+            if pref in active_ids:
+                return pref
+                
+        # Safe fallback to any text generation model (excluding whisper/guard)
+        text_models = [
+            m.id for m in models.data 
+            if not any(x in m.id.lower() for x in ["whisper", "guard", "orpheus"])
+        ]
+        return text_models[0] if text_models else "openai/gpt-oss-120b"
+    except Exception as e:
+        logger.warning(f"GROQ_MODEL_DISCOVERY_FAILED | {e}")
+        return "openai/gpt-oss-120b"
 
 
 def is_valid_hr_response(text: str) -> bool:
     """Validates that the generated response actually contains policy text."""
     if not text or len(text.strip()) < 40:
         return False
-    # Properly escaped characters inside the regex class
     meaningful_text = re.sub(r"[📋📌•\s━─\-*]+", "", text)
     return len(meaningful_text) > 30
-
-
-def get_active_groq_model() -> Optional[str]:
-    """Dynamically identifies the best active English-capable general text model on Groq."""
-    if not groq_client:
-        return None
-    try:
-        models = groq_client.models.list()
-        # Exclude audio, guard, and non-English/specialized models
-        active_ids = [
-            m.id for m in models.data 
-            if not any(x in m.id.lower() for x in ["whisper", "guard", "allam", "vision"])
-        ]
-        
-        preferred_order = [
-            "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
-            "llama3-70b-8192",
-            "llama3-8b-8192",
-            "qwen-2.5-32b",
-            "deepseek-r1-distill-llama-70b",
-        ]
-        for pref in preferred_order:
-            if pref in active_ids:
-                return pref
-        return active_ids[0] if active_ids else "llama-3.1-8b-instant"
-    except Exception as e:
-        logger.warning(f"GROQ_MODEL_DISCOVERY_FAILED | {e}")
-        return "llama-3.1-8b-instant"
-
 
 
 def execute_llm_with_backoff_failover(
     gemini_client, prompt: str
 ) -> Tuple[Optional[str], dict, str]:
-    """Cascading Execution: Gemini 2.5 Flash -> Groq with Output Quality Guard."""
+    """Cascading Execution: Gemini 2.5 Flash -> Dynamic Groq Free Tier with Output Quality Guard."""
 
     # ---------------------------------------------------------
     # Tier 1: Gemini 2.5 Flash (Primary)
@@ -297,7 +300,7 @@ def execute_llm_with_backoff_failover(
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.1,
-                    max_output_tokens=1024,
+                    max_output_tokens=350,
                 ),
             )
             if response and response.text:
@@ -318,7 +321,7 @@ def execute_llm_with_backoff_failover(
             time.sleep(sleep_duration)
 
     # ---------------------------------------------------------
-    # Tier 2: Filtered Groq Failover
+    # Tier 2: Filtered Groq Failover (openai/gpt-oss-120b, 20b, compound)
     # ---------------------------------------------------------
     if groq_client:
         selected_model = get_active_groq_model()
@@ -330,7 +333,7 @@ def execute_llm_with_backoff_failover(
                         model=selected_model,
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0.1,
-                        max_tokens=1024,
+                        max_tokens=350,
                     )
                     raw_content = chat_completion.choices[0].message.content or ""
                     cleaned_content = clean_reasoning_and_artifacts(raw_content)
@@ -450,10 +453,8 @@ Card Response:"""
 
         # 4. Fallback Handling & Clean Semantic Cache Guard
         if not response_text or model_used == "none":
-            # Both LLMs failed -> Serve raw excerpts to user without saving to Redis cache
             response_text, citation_footer = format_raw_chunks_fallback(all_retrieved)
         else:
-            # ONLY save to Redis semantic cache when generated by Gemini or Groq
             save_semantic_cached_answer(query, response_text, citation_footer)
 
         # 5. Save to Conversation Memory

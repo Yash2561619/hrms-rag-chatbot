@@ -15,7 +15,7 @@ class Config:
     PHONE_NUMBER_ID = os.getenv('PHONE_NUMBER_ID')
     WABA_ID = os.getenv('WABA_ID')
     VERIFY_TOKEN = os.getenv('VERIFY_TOKEN')
-
+    DATABASE_URL = os.getenv('DATABASE_URL')
     # Gemini
     GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
     UPSTASH_REDIS_REST_URL = os.environ.get("UPSTASH_REDIS_REST_URL")

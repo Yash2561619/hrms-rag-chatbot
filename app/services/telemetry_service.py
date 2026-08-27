@@ -21,12 +21,20 @@ try:
 
     if public_key and secret_key:
         try:
-            # Compatible with both host and base_url parameters
-            langfuse_client = Langfuse(
-                public_key=public_key,
-                secret_key=secret_key,
-                host=host_url
-            )
+            # Compatible with both host and base_url parameters across Langfuse versions
+            try:
+                langfuse_client = Langfuse(
+                    public_key=public_key,
+                    secret_key=secret_key,
+                    base_url=host_url,
+                )
+            except TypeError:
+                langfuse_client = Langfuse(
+                    public_key=public_key,
+                    secret_key=secret_key,
+                    host=host_url,
+                )
+            
             langfuse_enabled = True
             logger.info(f"✅ LANGFUSE_INITIALIZED | host={host_url}")
         except Exception as e:
@@ -77,7 +85,7 @@ def trace_rag_interaction(
         source_tag = (
             "cache_hit"
             if cache_hit
-            else ("groq_failover" if "groq" in model_name.lower() or "gpt-oss" in model_name.lower() or "qwen" in model_name.lower() else "gemini_primary")
+            else ("groq_failover" if any(k in model_name.lower() for k in ["groq", "gpt-oss", "qwen", "compound"]) else "gemini_primary")
         )
 
         trace_params = {
@@ -103,15 +111,14 @@ def trace_rag_interaction(
             trace = langfuse_client.create_trace(**trace_params)
 
         if not trace:
-            # In some SDK v3 setups, direct span creation without root trace object is used
             logger.debug("TRACE_OBJ_NONE_FALLBACK")
             return
 
-        # 1. Log Retrieval Span
+        # 1. Log Retrieval Span (Updated for pgvector)
         if retrieved_chunks and hasattr(trace, "span"):
             try:
                 trace.span(
-                    name="hybrid_faiss_bm25_retrieval",
+                    name="hybrid_pgvector_bm25_retrieval",
                     input={"query": query_text},
                     output={"chunks": retrieved_chunks[:4]},
                     metadata={"retrieved_count": len(retrieved_chunks)},
@@ -147,7 +154,7 @@ def trace_rag_interaction(
             except Exception as score_err:
                 logger.debug(f"SCORE_NOTICE | {score_err}")
 
-        # 4. Immediate Flush to send trace without waiting
+        # 4. Immediate Flush
         if hasattr(langfuse_client, "flush"):
             langfuse_client.flush()
             logger.info(f"✅ TRACE_LOGGED_LANGFUSE | user={user_id} | model={model_name} | latency={latency_ms:.1f}ms")

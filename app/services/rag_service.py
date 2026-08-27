@@ -1,6 +1,6 @@
 """Advanced RAG Service for HR Policy Queries.
 
-Includes Query Expansion, Hybrid FAISS + BM25 Search, Math RRF Re-Ranking,
+Includes Native PostgreSQL pgvector + BM25 Hybrid Search, Math RRF Re-Ranking,
 Semantic Redis Caching, Exponential Backoff with Jitter, Dynamic Groq Failover,
 Artifact/Reasoning Stripping, Clean Cache Guard, and Langfuse Observability.
 Location: app/services/rag_service.py
@@ -11,10 +11,11 @@ import os
 import random
 import re
 import time
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 from google.genai import types
 from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
-from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
+import psycopg2
 from rank_bm25 import BM25Okapi
 
 from app.services.memory_service import add_to_chat_history, get_chat_history
@@ -30,43 +31,83 @@ logger = logging.getLogger(__name__)
 # Initialize Groq Client safely
 try:
     from groq import Groq
+
     groq_api_key = os.getenv("GROQ_API_KEY")
     groq_client = Groq(api_key=groq_api_key) if groq_api_key else None
 except Exception as e:
     logger.warning(f"GROQ_INIT_FAILED | {e}")
     groq_client = None
 
-# Global index references cached in RAM
-faiss_store = None
+# Global references
+DATABASE_URL = os.getenv("DATABASE_URL")
+embeddings_model = FastEmbedEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
 bm25_index = None
 all_docs = []
 
 
-def load_indexes():
-    """Loads FAISS using lightweight ONNX-based FastEmbed (<60 MB RAM)."""
-    global faiss_store, bm25_index, all_docs
+def load_indexes(force_reload: bool = False):
+    """Loads documents from PostgreSQL pgvector into RAM for BM25 sparse matching."""
+    global bm25_index, all_docs
 
-    if faiss_store is None:
+    if (bm25_index is None or force_reload) and DATABASE_URL:
         try:
-            embeddings = FastEmbedEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2"
-            )
+            conn = psycopg2.connect(DATABASE_URL)
+            cur = conn.cursor()
+            cur.execute("SELECT content, metadata FROM policy_vectors;")
+            rows = cur.fetchall()
 
-            if os.path.exists("faiss_index"):
-                faiss_store = FAISS.load_local(
-                    "faiss_index", embeddings, allow_dangerous_deserialization=True
-                )
-                all_docs = list(faiss_store.docstore._dict.values())
+            all_docs = [
+                Document(page_content=r[0], metadata=r[1] if r[1] else {})
+                for r in rows
+            ]
+            tokenized_corpus = [
+                doc.page_content.lower().split() for doc in all_docs
+            ]
 
-                tokenized_corpus = [
-                    doc.page_content.lower().split() for doc in all_docs
-                ]
+            if tokenized_corpus:
                 bm25_index = BM25Okapi(tokenized_corpus)
-                logger.info("HYBRID_INDEXES_LOADED_SUCCESSFULLY (FastEmbed + BM25) ✅")
+                logger.info(
+                    f"PGVECTOR_AND_BM25_READY ✅ | Loaded {len(all_docs)} documents"
+                )
             else:
-                logger.error("faiss_index folder not found.")
+                bm25_index = None
+                all_docs = []
+
+            cur.close()
+            conn.close()
         except Exception as e:
-            logger.error(f"LOAD_INDEXES_ERROR | {e}")
+            logger.error(f"PGVECTOR_LOAD_ERROR | {e}")
+
+
+def pgvector_dense_search(query_vec: List[float], top_k: int = 6) -> List[Document]:
+    """Performs native HNSW cosine distance search (<=>) directly in PostgreSQL."""
+    if not DATABASE_URL:
+        return []
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT content, metadata, 1 - (embedding <=> %s::vector) AS similarity
+            FROM policy_vectors
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s;
+            """,
+            (str(query_vec), str(query_vec), top_k),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        return [
+            Document(page_content=r[0], metadata=r[1] if r[1] else {})
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error(f"PGVECTOR_QUERY_ERROR | {e}")
+        return []
 
 
 def multi_query_expansion(query: str, gemini_client) -> list[str]:
@@ -103,41 +144,44 @@ Output format: Return ONLY the queries separated by newlines, no bullet points o
 def hybrid_retrieve(
     queries: list[str], top_k: int = 6
 ) -> tuple[list, list, list]:
-    """Executes FAISS + BM25 Hybrid Search and returns dense, sparse, and merged results."""
+    """Executes pgvector (Dense) + BM25 (Sparse) search and returns candidate sets."""
     load_indexes()
-    if not faiss_store or not bm25_index:
-        return [], [], []
-
     dense_docs = []
     sparse_docs = []
 
     for q in queries:
-        d_docs = faiss_store.similarity_search(q, k=top_k)
+        # 1. Native Postgres pgvector dense retrieval
+        q_vec = list(embeddings_model.embed_query(q))
+        d_docs = pgvector_dense_search(q_vec, top_k=top_k)
         dense_docs.extend(d_docs)
 
-        tokenized_q = q.lower().split()
-        bm25_scores = bm25_index.get_scores(tokenized_q)
-        top_indices = sorted(
-            range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True
-        )[:top_k]
-        s_docs = [all_docs[i] for i in top_indices]
-        sparse_docs.extend(s_docs)
+        # 2. In-memory BM25 sparse retrieval
+        if bm25_index and all_docs:
+            tokenized_q = q.lower().split()
+            bm25_scores = bm25_index.get_scores(tokenized_q)
+            top_indices = sorted(
+                range(len(bm25_scores)),
+                key=lambda i: bm25_scores[i],
+                reverse=True,
+            )[:top_k]
+            s_docs = [all_docs[i] for i in top_indices]
+            sparse_docs.extend(s_docs)
 
     all_retrieved = dense_docs + sparse_docs
     return dense_docs, sparse_docs, all_retrieved
 
 
 def math_rrf_rerank(
-    faiss_chunks: list, bm25_chunks: list, top_k: int = 4
+    dense_chunks: list, bm25_chunks: list, top_k: int = 4
 ) -> tuple[str, str, list]:
-    """Reranks candidate chunks mathematically and formats clean citations."""
-    if not faiss_chunks and not bm25_chunks:
+    """Reranks candidate chunks mathematically using Reciprocal Rank Fusion."""
+    if not dense_chunks and not bm25_chunks:
         return "", "", []
 
     rrf_scores = {}
     chunk_map = {}
 
-    for rank, doc in enumerate(faiss_chunks, start=1):
+    for rank, doc in enumerate(dense_chunks, start=1):
         doc_id = doc.page_content
         chunk_map[doc_id] = doc
         rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (60 + rank))
@@ -231,7 +275,7 @@ def clean_reasoning_and_artifacts(text: str) -> str:
     """Strips <think> tags and excessive repeated divider artifacts safely."""
     if not text:
         return ""
-    
+
     # 1. Strip think blocks cleanly
     if "</think>" in text:
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
@@ -250,23 +294,22 @@ def get_active_groq_model() -> Optional[str]:
     try:
         models = groq_client.models.list()
         active_ids = [m.id for m in models.data]
-        
-        # Priority order matching your free tier limits
+
         preferred_order = [
             "openai/gpt-oss-120b",
             "openai/gpt-oss-20b",
             "groq/compound-mini",
             "groq/compound",
-            "qwen/qwen3.6-27b"
+            "qwen/qwen3.6-27b",
         ]
-        
+
         for pref in preferred_order:
             if pref in active_ids:
                 return pref
-                
-        # Safe fallback to any text generation model (excluding whisper/guard/orpheus)
+
         text_models = [
-            m.id for m in models.data 
+            m.id
+            for m in models.data
             if not any(x in m.id.lower() for x in ["whisper", "guard", "orpheus"])
         ]
         return text_models[0] if text_models else "openai/gpt-oss-120b"
@@ -310,16 +353,34 @@ def execute_llm_with_backoff_failover(
                 cleaned_text = clean_reasoning_and_artifacts(response.text)
                 if is_valid_hr_response(cleaned_text):
                     tokens_used = {
-                        "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) or 0,
-                        "completion_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) or 0,
-                        "total_tokens": getattr(response.usage_metadata, "total_token_count", 0) or 0,
+                        "prompt_tokens": (
+                            getattr(
+                                response.usage_metadata, "prompt_token_count", 0
+                            )
+                            or 0
+                        ),
+                        "completion_tokens": (
+                            getattr(
+                                response.usage_metadata,
+                                "candidates_token_count",
+                                0,
+                            )
+                            or 0
+                        ),
+                        "total_tokens": (
+                            getattr(
+                                response.usage_metadata, "total_token_count", 0
+                            )
+                            or 0
+                        ),
                     }
                     return cleaned_text, tokens_used, "gemini-2.5-flash"
         except Exception as err:
             jitter = random.uniform(0.1, 0.4)
-            sleep_duration = (base_delay * (2 ** attempt)) + jitter
+            sleep_duration = (base_delay * (2**attempt)) + jitter
             logger.warning(
-                f"GEMINI_ATTEMPT_{attempt+1}_FAILED | Retrying in {sleep_duration:.2f}s | error={err}"
+                f"GEMINI_ATTEMPT_{attempt+1}_FAILED | Retrying in"
+                f" {sleep_duration:.2f}s | error={err}"
             )
             time.sleep(sleep_duration)
 
@@ -339,30 +400,46 @@ def execute_llm_with_backoff_failover(
                         max_tokens=700,
                         top_p=0.8,
                     )
-                    raw_content = chat_completion.choices[0].message.content or ""
+                    raw_content = (
+                        chat_completion.choices[0].message.content or ""
+                    )
                     cleaned_content = clean_reasoning_and_artifacts(raw_content)
-                    
+
                     if is_valid_hr_response(cleaned_content):
                         usage = chat_completion.usage
                         tokens_used = {
-                            "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                            "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
-                            "total_tokens": getattr(usage, "total_tokens", 0) or 0,
+                            "prompt_tokens": getattr(usage, "prompt_tokens", 0)
+                            or 0,
+                            "completion_tokens": getattr(
+                                usage, "completion_tokens", 0
+                            )
+                            or 0,
+                            "total_tokens": getattr(usage, "total_tokens", 0)
+                            or 0,
                         }
                         return cleaned_content, tokens_used, selected_model
                     else:
-                        logger.warning(f"GROQ_OUTPUT_INVALID_OR_EMPTY ({selected_model})")
+                        logger.warning(
+                            f"GROQ_OUTPUT_INVALID_OR_EMPTY ({selected_model})"
+                        )
                 except Exception as groq_err:
                     jitter = random.uniform(0.1, 0.3)
-                    sleep_duration = (0.4 * (2 ** attempt)) + jitter
-                    logger.warning(f"GROQ_ATTEMPT_{attempt+1}_FAILED ({selected_model}) | {groq_err}")
+                    sleep_duration = (0.4 * (2**attempt)) + jitter
+                    logger.warning(
+                        f"GROQ_ATTEMPT_{attempt+1}_FAILED ({selected_model}) |"
+                        f" {groq_err}"
+                    )
                     time.sleep(sleep_duration)
 
-    return None, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, "none"
+    return (
+        None,
+        {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "none",
+    )
 
 
 def handle_rag_query(employee, query: str, collection_unused, gemini_client):
-    """Handles end-to-end RAG query flow with Semantic Cache, Hybrid RAG, Multi-LLM Failover, and Langfuse Tracing."""
+    """Handles end-to-end RAG query flow with Semantic Cache, pgvector Hybrid Search, Multi-LLM Failover, and Langfuse Tracing."""
     start_time = time.time()
     sender = employee["whatsapp"]
     employee_id = employee.get("employee_id") or "UNKNOWN_EMP"
@@ -380,7 +457,6 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
             final_whatsapp_msg = f"{cached_response}{cached_footer}"
             send_text(sender, final_whatsapp_msg)
 
-            # Langfuse Trace: Cache Hit
             trace_rag_interaction(
                 user_id=employee_id,
                 session_id=session_id,
@@ -388,11 +464,16 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
                 response_text=cached_response,
                 latency_ms=latency_ms,
                 cache_hit=True,
-                tokens_used={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                tokens_used={
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
                 model_name="semantic_cache",
             )
             logger.info(
-                f"RAG_QUERY_SUCCESS (FROM_CACHE) ⚡ | user={employee_id} | latency={latency_ms:.1f}ms"
+                f"RAG_QUERY_SUCCESS (FROM_CACHE) ⚡ | user={employee_id} |"
+                f" latency={latency_ms:.1f}ms"
             )
             return
 
@@ -407,7 +488,10 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
 
         if not all_retrieved:
             latency_ms = (time.time() - start_time) * 1000
-            no_info_msg = "❌ I couldn't find relevant information in the company policy documents."
+            no_info_msg = (
+                "❌ I couldn't find relevant information in the company policy"
+                " documents."
+            )
             send_text(sender, no_info_msg)
 
             trace_rag_interaction(
@@ -417,7 +501,11 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
                 response_text=no_info_msg,
                 latency_ms=latency_ms,
                 cache_hit=False,
-                tokens_used={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                tokens_used={
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
                 retrieved_chunks=[],
                 model_name="none",
             )
@@ -455,11 +543,15 @@ EMPLOYEE QUESTION:
 Card Response:"""
 
         # 3. Multi-LLM Execution with Jittered Backoff
-        response_text, tokens_used, model_used = execute_llm_with_backoff_failover(gemini_client, prompt)
+        response_text, tokens_used, model_used = (
+            execute_llm_with_backoff_failover(gemini_client, prompt)
+        )
 
         # 4. Fallback Handling & Clean Semantic Cache Guard
         if not response_text or model_used == "none":
-            response_text, citation_footer = format_raw_chunks_fallback(all_retrieved)
+            response_text, citation_footer = format_raw_chunks_fallback(
+                all_retrieved
+            )
         else:
             save_semantic_cached_answer(query, response_text, citation_footer)
 
@@ -487,12 +579,14 @@ Card Response:"""
         )
 
         logger.info(
-            f"RAG_QUERY_SUCCESS ({model_used}) | user={employee_id} | latency={latency_ms:.1f}ms"
+            f"RAG_QUERY_SUCCESS ({model_used}) | user={employee_id} |"
+            f" latency={latency_ms:.1f}ms"
         )
 
     except Exception as e:
         logger.exception(f"RAG_FATAL_ERROR | user={employee_id}")
         send_text(
             sender,
-            "❌ An error occurred while retrieving policy details. Please try again later.",
+            "❌ An error occurred while retrieving policy details. Please try"
+            " again later.",
         )

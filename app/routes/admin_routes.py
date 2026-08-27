@@ -27,10 +27,13 @@ from app.services.auth_service import authenticate_admin
 from app.services.s3_service import (
     delete_file_from_s3,
     generate_presigned_url,
-    sync_faiss_from_s3,
     upload_policy_to_s3,
     upload_salary_to_s3,
     upload_video_to_s3,
+)
+from app.services.policy_sync_service import (
+    sync_new_policy_from_s3,
+    delete_policy_everywhere,
 )
 from app.services.whatsapp_service import send_text
 from app.tasks.salary_tasks import process_bulk_salary_slips_job
@@ -63,12 +66,6 @@ from database import (
     save_training_video,
     update_employee,
     update_leave_status,
-)
-from scripts.update_db import (
-    get_pdf_hash,
-    get_pdf_version,
-    load_pdf_registry,
-    save_pdf_registry,
 )
 from validators import ValidationError, validate_phone
 
@@ -423,15 +420,11 @@ def upload_salary():
                 flash(f"❌ Employee {employee_id} not found", "danger")
                 return redirect(url_for("admin.upload_salary"))
 
-            # Safe extraction for both dict and tuple formats
             if isinstance(employee, dict):
                 emp_id = employee.get("employee_id") or employee_id
                 phone_num = employee.get("whatsapp") or employee.get("phone") or "0000"
             else:
-                # Handle tuple safely regardless of column count
                 emp_id = employee[0] if str(employee[0]).startswith("EMP") else (employee[1] if len(employee) > 1 else employee_id)
-                
-                # Extract phone: check index 2 (if 5-col row) or index 3/5
                 if len(employee) > 5:
                     phone_num = employee[5]
                 elif len(employee) >= 3:
@@ -477,14 +470,12 @@ def bulk_upload_salary():
     try:
         zip_bytes = zip_file.read()
 
-        # Enqueue background task to RQ
         job = salary_task_queue.enqueue(
             process_bulk_salary_slips_job,
             args=(zip_bytes,),
             job_timeout=600,
         )
 
-        # FIXED: Changed job.get_id() -> job.id
         job_short_id = str(job.id)[:8] if job and job.id else "active"
 
         flash(
@@ -542,61 +533,47 @@ def delete_salary_route(id):
 
 
 # =====================================================
-# POLICY MANAGEMENT
+# POLICY MANAGEMENT (PostgreSQL + pgvector Integration)
 # =====================================================
 
 @admin_bp.route("/policy-management", methods=["GET", "POST"])
 @login_required
 def policy_management():
-    """Manage HR policies with S3 storage and S3-based FAISS vector sync."""
-    POLICY_FOLDER = current_app.config.get("POLICY_FOLDER", "uploads/policies")
-    os.makedirs(POLICY_FOLDER, exist_ok=True)
-
+    """Manage HR policies with AWS S3 storage and automated pgvector indexing."""
     if request.method == "POST":
         file = request.files.get("policy")
         if not file or not file.filename.lower().endswith(".pdf"):
             flash("❌ Only PDF files allowed", "danger")
             return redirect(url_for("admin.policy_management"))
 
-        temp_filepath = None
         try:
             filename = secure_filename(file.filename)
-            temp_filepath = os.path.join(POLICY_FOLDER, filename)
-            file.save(temp_filepath)
 
-            file_hash = get_pdf_hash(temp_filepath)
-            version = get_pdf_version(filename)
+            # 1. Upload to S3
+            s3_key = upload_policy_to_s3(file, filename)
 
-            with open(temp_filepath, "rb") as upload_file:
-                s3_key = upload_policy_to_s3(upload_file, filename)
-
+            # 2. Record policy metadata in main database
             save_policy_file(
                 file_name=filename,
                 s3_key=s3_key,
-                version=version,
-                file_hash=file_hash,
+                version="1.0",
+                file_hash="",
             )
 
-            synced = sync_faiss_from_s3()
-            log_activity(f"📚 Policy uploaded to S3: {filename}")
+            # 3. Stream from S3, vectorize with FastEmbed, and insert into pgvector
+            synced = sync_new_policy_from_s3(s3_key)
+            log_activity(f"📚 Policy uploaded & vectorized: {filename}")
 
             if synced:
-                flash("✅ Policy uploaded and FAISS index synced!", "success")
+                flash("✅ Policy uploaded and indexed into pgvector successfully!", "success")
             else:
-                flash("✅ Policy uploaded to S3! Please re-index FAISS via indexer.", "info")
+                flash("⚠️ Policy uploaded to S3, but vector indexing encountered an issue.", "warning")
 
             return redirect(url_for("admin.policy_management"))
 
         except Exception as e:
             logger.exception(f"UPLOAD_POLICY_ERROR | error={e}")
             flash("❌ Failed to upload policy", "danger")
-
-        finally:
-            if temp_filepath and os.path.exists(temp_filepath):
-                try:
-                    os.remove(temp_filepath)
-                except OSError:
-                    pass
 
     policies = get_all_policy_files()
     return render_template("policy_management.html", policies=policies)
@@ -605,27 +582,23 @@ def policy_management():
 @admin_bp.route("/delete-policy/<path:filename>", methods=["GET", "POST"])
 @login_required
 def delete_policy(filename):
-    """Delete policy file from S3, database, and update tracking registry."""
+    """Delete policy from S3, pgvector table, PostgreSQL metadata, and clear Redis cache."""
     try:
-        s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=f"policies/{filename}")
-        delete_policy_file(filename)
+        clean_name = secure_filename(filename)
 
-        try:
-            registry = load_pdf_registry()
-            if filename in registry:
-                del registry[filename]
-                save_pdf_registry(registry)
-        except Exception as e:
-            logger.warning(f"REGISTRY_UPDATE_SKIPPED | {filename} | {e}")
+        # 1. Delete from main app database registry
+        delete_policy_file(clean_name)
 
-        log_activity(f"🗑️ Deleted policy: {filename}")
-        flash(f"✅ Successfully deleted {filename} from S3 and database.", "success")
+        # 2. Delete from S3, purge vector embeddings from PostgreSQL, and invalidate Redis cache
+        delete_policy_everywhere(clean_name)
+
+        log_activity(f"🗑️ Deleted policy: {clean_name}")
+        flash(f"✅ Successfully deleted {clean_name} from S3, database, and vector index.", "success")
     except Exception as e:
-        logger.error(f"DELETE_FAILED | file={filename} | error={e}")
+        logger.error(f"DELETE_POLICY_FAILED | file={filename} | error={e}")
         flash(f"❌ Failed to delete {filename}: {str(e)}", "danger")
 
     return redirect(url_for("admin.policy_management"))
-
 
 
 @admin_bp.route("/download-policy/<path:filename>")

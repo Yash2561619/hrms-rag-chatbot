@@ -16,7 +16,7 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from flask import Flask, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 import google.genai as genai
 
 from app.routes.admin_routes import admin_bp
@@ -58,7 +58,6 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config.from_object(Config)
-_initialized = False
 
 app.secret_key = app.config.get("SECRET_KEY", "apexhr-super-secret-key-2026")
 app.config["SESSION_PERMANENT"] = False
@@ -84,10 +83,12 @@ configure(WHATSAPP_TOKEN, PHONE_NUMBER_ID)
 
 # Global Gemini client variable
 gemini_client = None
+_startup_lock = threading.Lock()
+_initialized = False
 
 
 def init_gemini():
-    """Initialize Gemini client."""
+    """Initialize Gemini client safely."""
     global gemini_client
     if GEMINI_API_KEY:
         try:
@@ -98,39 +99,40 @@ def init_gemini():
 
 
 def startup_background_tasks():
-    """Runs once on application startup."""
+    """Thread-safe single initialization on startup."""
     global _initialized
-    if _initialized:
-        return
+    with _startup_lock:
+        if _initialized:
+            return
 
-    logger.info("=" * 50)
-    logger.info("STARTING MAIN APPLICATION INITIALIZATION")
-    logger.info("=" * 50)
+        logger.info("=" * 50)
+        logger.info("STARTING MAIN APPLICATION INITIALIZATION")
+        logger.info("=" * 50)
 
-    # 1. Initialize PostgreSQL Database Tables
-    try:
-        initialize_database()
-        logger.info("[STARTUP] ✅ PostgreSQL database initialized")
-    except Exception as e:
-        logger.error(f"[STARTUP] PostgreSQL DB init error: {e}")
+        # 1. Initialize PostgreSQL Database Tables
+        try:
+            initialize_database()
+            logger.info("[STARTUP] ✅ PostgreSQL database initialized")
+        except Exception as e:
+            logger.error(f"[STARTUP] PostgreSQL DB init error: {e}")
 
-    # 2. Pre-warm PostgreSQL pgvector & BM25 sparse index in memory
-    try:
-        load_indexes()
-        logger.info("[STARTUP] ✅ pgvector & BM25 indexes pre-warmed successfully")
-    except Exception as e:
-        logger.error(f"[STARTUP] Index pre-warm error: {e}")
+        # 2. Pre-warm PostgreSQL pgvector & BM25 sparse index in memory
+        try:
+            load_indexes()
+            logger.info("[STARTUP] ✅ pgvector & BM25 indexes pre-warmed successfully")
+        except Exception as e:
+            logger.error(f"[STARTUP] Index pre-warm error: {e}")
 
-    # 3. Initialize Gemini Client
-    try:
-        init_gemini()
-    except Exception as e:
-        logger.error(f"[STARTUP] Gemini init error: {e}")
+        # 3. Initialize Gemini Client
+        try:
+            init_gemini()
+        except Exception as e:
+            logger.error(f"[STARTUP] Gemini init error: {e}")
 
-    _initialized = True
+        _initialized = True
 
 
-# Run initialization safely on module load
+# Run startup initialization
 startup_background_tasks()
 
 
@@ -152,9 +154,7 @@ def router(employee, message):
     )
 
     try:
-        # =========================================================================
-        # 1. INTERACTIVE LIST MENU SELECTIONS (Instant 1-Tap Routing)
-        # =========================================================================
+        # 1. Interactive Menu Selections
         if msg_cleaned == "action_apply_leave":
             start_leave_conversation(employee, "I want to apply leave", gemini_client)
             return
@@ -175,24 +175,15 @@ def router(employee, message):
             handle_training_video(employee, "training video")
             return
 
-        # =========================================================================
-        # 2. ACTIVE MULTI-TURN LEAVE SESSION (Handles Text & Buttons)
-        # =========================================================================
+        # 2. Active Multi-Turn Leave Session
         if sender in leave_sessions:
-            # Cancel Actions (via text or interactive button)
             if msg_cleaned == "btn_cancel_leave" or msg_lower in [
-                "cancel",
-                "stop",
-                "exit",
-                "quit",
-                "never mind",
-                "forget it",
+                "cancel", "stop", "exit", "quit", "never mind", "forget it",
             ]:
                 del leave_sessions[sender]
                 send_text(sender, "❌ Leave request cancelled.")
                 return
 
-            # Reset Action
             if msg_lower in ["restart", "reset", "start over"]:
                 leave_sessions[sender] = {
                     "from_date": None,
@@ -202,59 +193,40 @@ def router(employee, message):
                 }
                 send_text(
                     sender,
-                    "🔄 Let's start again.\n\n📅 From which date would you like to"
-                    " start your leave?",
+                    "🔄 Let's start again.\n\n📅 From which date would you like to start your leave?",
                 )
                 return
 
-            # Continue conversational steps or handle confirmation button
             continue_leave_conversation(employee, message, gemini_client)
             return
 
-        # =========================================================================
-        # 3. TEXT INTENT CLASSIFICATION (Rule-based Regex + Gemini fallback)
-        # =========================================================================
+        # 3. Intent Classification & Execution
         intent = classify_intent(message, gemini_client)
         logger.info(f"Intent classified: {intent}")
 
         if intent == "greeting":
             handle_greeting(employee)
-
         elif intent == "leave_balance":
             handle_leave_balance(employee)
-
         elif intent == "apply_leave":
             start_leave_conversation(employee, message, gemini_client)
-
         elif intent == "salary_slip":
             handle_salary_slip(employee, message)
-
         elif intent == "training_video":
             handle_training_video(employee, message)
-
         elif intent == "leave_history":
             handle_leave_history(employee)
-
         elif intent == "rag":
-            handle_rag_query(
-                employee,
-                message,
-                None,
-                gemini_client,
-            )
-
+            handle_rag_query(employee, message, None, gemini_client)
         else:
             send_text(
                 sender,
-                "I didn't quite catch that. Type *'Hi'* to see the main menu or ask"
-                " any policy question.",
+                "I didn't quite catch that. Type *'Hi'* to see the main menu or ask any policy question.",
             )
 
     except Exception:
         logger.exception(f'ROUTER_ERROR | user={employee.get("employee_id")}')
-        send_text(
-            sender, "❌ Something went wrong while processing your request."
-        )
+        send_text(sender, "❌ Something went wrong while processing your request.")
 
 
 @app.route("/webhook", methods=["GET"])
@@ -310,12 +282,10 @@ def webhook():
         message = value["messages"][0]
         message_id = message.get("id")
 
-        # 1. Deduplication Guard
         if is_duplicate_message(message_id):
             logger.info(f"DUPLICATE_WEBHOOK_SKIPPED | message_id={message_id}")
             return "OK", 200
 
-        # 2. Extract Message Details
         sender_number, text = extract_message_info(body)
 
         if not text or not sender_number:
@@ -324,30 +294,26 @@ def webhook():
 
         original_sender = sender_number
         logger.info(f"RAW_WHATSAPP_NUMBER = {original_sender}")
-        sender = original_sender
 
         normalized_sender = (
-            sender[2:] if sender.startswith("91") and len(sender) == 12 else sender
+            original_sender[2:] if original_sender.startswith("91") and len(original_sender) == 12 else original_sender
         )
 
-        # 3. Rate limiting check
         if not check_rate_limit(normalized_sender):
             logger.warning(f"RATE_LIMIT_EXCEEDED | sender={original_sender}")
             send_text(
                 original_sender,
-                "⚠️ You are sending messages too fast. Please wait a moment and try"
-                " again.",
+                "⚠️ You are sending messages too fast. Please wait a moment and try again.",
             )
             return "OK", 200
 
         logger.info(
-            f"WHATSAPP_MESSAGE | sender={original_sender} |"
-            f" normalized={normalized_sender} | text={text[:50]}"
+            f"WHATSAPP_MESSAGE | sender={original_sender} | normalized={normalized_sender} | text={text[:50]}"
         )
 
         mark_read(message_id)
 
-        employee = get_employee_by_whatsapp(sender)
+        employee = get_employee_by_whatsapp(original_sender)
 
         if employee is None:
             logger.warning(f"UNREGISTERED_USER | sender={original_sender}")
@@ -355,15 +321,13 @@ def webhook():
             return "OK", 200
 
         logger.info(
-            f"AUTH_SUCCESS | employee={employee.get('employee_id')} |"
-            f" name={employee.get('name')}"
+            f"AUTH_SUCCESS | employee={employee.get('employee_id')} | name={employee.get('name')}"
         )
 
-        # 4. Process in background thread
-        thread = threading.Thread(
+        # Process message in background thread
+        threading.Thread(
             target=router, args=(employee, text), daemon=True
-        )
-        thread.start()
+        ).start()
 
     except Exception:
         logger.exception("WEBHOOK_ERROR")
@@ -374,13 +338,13 @@ def webhook():
 @app.route("/health", methods=["GET", "HEAD"])
 def health():
     """Health check endpoint supporting GET and HEAD for UptimeRobot & Render."""
-    return {
+    return jsonify({
         "status": "healthy",
         "database": "postgresql_connected",
         "vector_store": "pgvector_ready",
         "gemini_client": "initialized" if gemini_client else "not_initialized",
         "service": "whatsapp-hr-assistant",
-    }, 200
+    }), 200
 
 
 @app.route("/videos/<path:filename>")

@@ -518,7 +518,12 @@ def view_salary_route(id):
         flash("❌ Salary slip not found.", "danger")
         return redirect(url_for("admin.upload_salary"))
 
-    return redirect(generate_presigned_url(row[0]))
+    url = generate_presigned_url(row[0])
+    if not url:
+        flash("❌ Unable to generate viewing link for salary slip.", "danger")
+        return redirect(url_for("admin.upload_salary"))
+
+    return redirect(url)
 
 
 @admin_bp.route("/delete-salary/<int:id>")
@@ -621,9 +626,15 @@ def delete_policy(filename):
 @admin_bp.route("/download-policy/<path:filename>")
 @login_required
 def download_policy(filename):
-    """Download policy file using presigned S3 URL."""
-    s3_key = f"policies/{filename}"
-    url = generate_presigned_url(s3_key)
+    """Download policy file using presigned S3 URL as an attachment."""
+    clean_name = secure_filename(os.path.basename(filename))
+    s3_key = f"policies/{clean_name}"
+    url = generate_presigned_url(s3_key, download_filename=clean_name)
+    
+    if not url:
+        flash("❌ Unable to generate download link. File may not exist in S3.", "danger")
+        return redirect(url_for("admin.policy_management"))
+
     return redirect(url)
 
 
@@ -631,8 +642,14 @@ def download_policy(filename):
 @login_required
 def view_policy(filename):
     """View policy file in browser using presigned S3 URL."""
-    s3_key = f"policies/{filename}"
+    clean_name = secure_filename(os.path.basename(filename))
+    s3_key = f"policies/{clean_name}"
     url = generate_presigned_url(s3_key)
+    
+    if not url:
+        flash("❌ Unable to open policy. File may not exist in S3.", "danger")
+        return redirect(url_for("admin.policy_management"))
+
     return redirect(url)
 
 

@@ -37,7 +37,9 @@ def get_s3_client():
             region_name=aws_region,
         )
     else:
-        logger.warning("AWS credentials missing from environment. Using default credential chain.")
+        logger.warning(
+            "AWS credentials missing from environment. Using default credential chain."
+        )
         _s3_client = boto3.client("s3", region_name=aws_region)
 
     return _s3_client
@@ -118,17 +120,30 @@ def upload_policy_to_s3(file_obj, filename: str) -> Optional[str]:
         return None
 
 
-def generate_presigned_url(s3_key: str, expiration: int = 3600) -> str:
-    """Generate pre-signed URL for viewing/downloading files securely."""
+def generate_presigned_url(
+    s3_key: str,
+    expiration: int = 3600,
+    download_filename: Optional[str] = None,
+) -> str:
+    """Generate pre-signed URL for viewing or downloading files securely."""
     s3 = get_s3_client()
     bucket = get_bucket_name()
     if not bucket or not s3_key:
         return ""
 
+    params = {"Bucket": bucket, "Key": s3_key}
+
+    if download_filename:
+        params["ResponseContentDisposition"] = (
+            f'attachment; filename="{download_filename}"'
+        )
+    else:
+        params["ResponseContentDisposition"] = "inline"
+
     try:
         return s3.generate_presigned_url(
             "get_object",
-            Params={"Bucket": bucket, "Key": s3_key},
+            Params=params,
             ExpiresIn=expiration,
         )
     except ClientError as e:

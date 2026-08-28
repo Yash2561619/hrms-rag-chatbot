@@ -377,7 +377,6 @@ def execute_llm_with_backoff_failover(
 
 
 def handle_rag_query(employee, query: str, collection_unused, gemini_client):
-    """Handles end-to-end RAG query flow with Cache, pgvector, LLMs, and Raw Chunks Fallback."""
     start_time = time.time()
     sender = employee["whatsapp"]
     employee_id = employee.get("employee_id") or "UNKNOWN_EMP"
@@ -387,7 +386,7 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
     try:
         # 1. Semantic Cache Probe
         cached_response, cached_footer = get_semantic_cached_answer(query)
-        if cached_response:
+        if cached_response and "❌" not in cached_response:
             latency_ms = (time.time() - start_time) * 1000
             add_to_chat_history(employee_id, query, cached_response)
             send_text(sender, f"{cached_response}{cached_footer}")
@@ -408,8 +407,8 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
         expanded_queries = multi_query_expansion(query, gemini_client)
         dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(expanded_queries, top_k=6)
 
-        # Early Guard: If policy is not found or deleted (no vectors passed similarity threshold)
-        if not all_retrieved or not dense_docs:
+        # STRICT GUARD: If no documents pass the similarity cutoff >= 0.40, STOP IMMEDIATELY
+        if not dense_docs or not all_retrieved:
             latency_ms = (time.time() - start_time) * 1000
             not_found_msg = "❌ This information is not covered in our official policy documents."
             send_text(sender, not_found_msg)
@@ -428,22 +427,25 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
 
         context, citation_footer, top_docs = math_rrf_rerank(dense_docs, sparse_docs, top_k=3)
 
-        prompt = f"""You are an AI HR Assistant. Answer the question using ONLY the provided HR Policy Excerpts.
-DO NOT use outside knowledge or make assumptions. If the answer is not explicitly stated in the excerpts, respond ONLY with:
+        # Double Check: If context is empty after reranking
+        if not context.strip():
+            not_found_msg = "❌ This information is not covered in our official policy documents."
+            send_text(sender, not_found_msg)
+            return
+
+        prompt = f"""You are an AI HR Assistant. You must ONLY answer using the provided Policy Excerpts below.
+You are STRICTLY FORBIDDEN from using outside general knowledge or assumptions.
+
+If the excerpts do NOT contain the exact answer for "{query}", your ENTIRE response must be ONLY:
 "❌ This information is not covered in our official policy documents."
 
 STRICT FORMATTING:
 1. Start directly with "📋 *Policy Information*" followed by "━━━━━━━━━━━━━━━━━━━".
 2. Output a MAXIMUM of 4 bullet points formatted as: • *Category:* Exact detail from excerpt.
-3. No introductory conversational text or conversational closures.
 
 ---
 POLICY EXCERPTS:
 {context}
-
----
-CHAT HISTORY:
-{chat_history_str}
 
 ---
 EMPLOYEE QUESTION:
@@ -454,18 +456,12 @@ Card Response:"""
         # 3. Cascading LLM Execution
         response_text, tokens_used, model_used = execute_llm_with_backoff_failover(gemini_client, prompt)
 
-        # 4. Handle Result & Fallback
-        if response_text and "❌" in response_text:
+        # 4. Handle Result & Clean Semantic Cache Guard
+        if not response_text or "❌" in response_text or "not covered" in response_text.lower():
             final_whatsapp_msg = "❌ This information is not covered in our official policy documents."
             send_text(sender, final_whatsapp_msg)
-        elif not response_text or model_used == "none":
-            # Both LLMs failed (quota / network issue) -> Serve raw chunks fallback
-            logger.warning(f"LLM_OUTAGE_TRIGGERED_RAW_FALLBACK | user={employee_id}")
-            raw_fallback_text, raw_footer = format_raw_chunks_fallback(top_docs)
-            final_whatsapp_msg = f"{raw_fallback_text}{raw_footer}"
-            send_text(sender, final_whatsapp_msg)
-            response_text = raw_fallback_text
         else:
+            # ONLY save to Redis if it is a verified, positive policy answer
             save_semantic_cached_answer(query, response_text, citation_footer)
             add_to_chat_history(employee_id, query, response_text)
             final_whatsapp_msg = f"{response_text}{citation_footer}"

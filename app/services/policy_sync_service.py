@@ -125,36 +125,43 @@ def sync_new_policy_from_s3(s3_key: str) -> bool:
             os.remove(tmp_path)
 
 
+# In app/services/policy_sync_service.py
+
 def delete_policy_everywhere(filename: str) -> bool:
     """Deletes policy from S3, removes vectors from PostgreSQL, and clears Redis cache."""
     logger.info(f"POLICY_DELETE_START | file={filename}")
     s3 = get_s3_client()
+    base_name = os.path.basename(filename).strip()
 
     try:
-        # 1. Delete from S3
-        s3_key = f"policies/{filename}"
-        try:
-            s3.delete_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
-            logger.info(f"S3_OBJECT_DELETED | key={s3_key}")
-        except Exception as s3_err:
-            logger.warning(f"S3_DELETE_WARNING | {s3_err}")
+        # 1. Delete from S3 (checks both with and without policies/ prefix)
+        for s3_key in [f"policies/{base_name}", base_name]:
+            try:
+                s3.delete_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+                logger.info(f"S3_OBJECT_DELETED | key={s3_key}")
+            except Exception:
+                pass
 
-        # 2. Delete from PostgreSQL (both policy_vectors and policies tables)
+        # 2. Robust Deletion from PostgreSQL pgvector
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
         
-        # Remove vector chunks
+        # Matches exact filename, partial path, or filename within JSON metadata
         cur.execute(
-            "DELETE FROM policy_vectors WHERE metadata->>'source' LIKE %s;",
-            (f"%{filename}%",)
+            """
+            DELETE FROM policy_vectors 
+            WHERE metadata->>'source' ILIKE %s 
+               OR metadata->>'source' ILIKE %s;
+            """,
+            (f"%{base_name}%", f"%{base_name.replace('.pdf', '')}%"),
         )
         deleted_chunks = cur.rowcount
 
-        # Remove from administrative tracking table if it exists
+        # Also remove from relational policies tracking table
         try:
             cur.execute(
-                "DELETE FROM policies WHERE filename = %s OR s3_key LIKE %s;",
-                (filename, f"%{filename}%")
+                "DELETE FROM policies WHERE filename ILIKE %s OR s3_key ILIKE %s;",
+                (f"%{base_name}%", f"%{base_name}%")
             )
         except Exception:
             pass
@@ -165,8 +172,10 @@ def delete_policy_everywhere(filename: str) -> bool:
 
         logger.info(f"PGVECTOR_CHUNKS_DELETED | rows_removed={deleted_chunks}")
 
-        # 3. Clear Redis Cache & force reload BM25 in RAM
+        # 3. Clear Redis Semantic Cache
         clear_semantic_cache()
+
+        # 4. Force Reload BM25 Sparse Index in RAM
         load_indexes(force_reload=True)
         return True
 

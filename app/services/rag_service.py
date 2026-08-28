@@ -298,18 +298,25 @@ def clean_reasoning_and_artifacts(text: str) -> str:
 
 
 def get_active_groq_model() -> Optional[str]:
-    """Discovers available models on active Groq account."""
+    """Discovers available models on active Groq account with reliable fallbacks."""
     if not groq_client:
         return None
     try:
         models = groq_client.models.list()
         active_ids = [m.id for m in models.data]
-        for pref in ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "groq/compound-mini", "qwen/qwen3.6-27b"]:
+        for pref in [
+            "llama-3.3-70b-versatile",
+            "openai/gpt-oss-120b",
+            "llama-3.1-8b-instant",
+            "openai/gpt-oss-20b",
+            "groq/compound-mini",
+            "qwen/qwen3.6-27b",
+        ]:
             if pref in active_ids:
                 return pref
-        return "openai/gpt-oss-120b"
+        return "llama-3.3-70b-versatile"
     except Exception:
-        return "openai/gpt-oss-120b"
+        return "llama-3.3-70b-versatile"
 
 
 def is_valid_hr_response(text: str) -> bool:
@@ -405,6 +412,7 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
                 latency_ms=latency_ms,
                 cache_hit=True,
                 tokens_used={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                retrieved_chunks=[],
                 model_name="semantic_cache",
             )
             return

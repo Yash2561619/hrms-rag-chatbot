@@ -68,7 +68,7 @@ def sync_new_policy_from_s3(s3_key: str) -> bool:
             logger.warning(f"NO_TEXT_CHUNKS_EXTRACTED | file={filename}")
             return False
 
-        # Set 1-indexed page number and filename in metadata
+        # Set 1-indexed page number and normalized source filename
         for chunk in chunks:
             chunk.metadata["source"] = filename
             if "page" in chunk.metadata:
@@ -94,8 +94,8 @@ def sync_new_policy_from_s3(s3_key: str) -> bool:
 
         # Remove previous versions of this policy if already present
         cur.execute(
-            "DELETE FROM policy_vectors WHERE metadata->>'source' = %s;",
-            (filename,)
+            "DELETE FROM policy_vectors WHERE metadata->>'source' ILIKE %s;",
+            (f"%{filename}%",)
         )
 
         execute_values(
@@ -125,8 +125,6 @@ def sync_new_policy_from_s3(s3_key: str) -> bool:
             os.remove(tmp_path)
 
 
-# In app/services/policy_sync_service.py
-
 def delete_policy_everywhere(filename: str) -> bool:
     """Deletes policy from S3, removes vectors from PostgreSQL, and clears Redis cache."""
     logger.info(f"POLICY_DELETE_START | file={filename}")
@@ -134,7 +132,7 @@ def delete_policy_everywhere(filename: str) -> bool:
     base_name = os.path.basename(filename).strip()
 
     try:
-        # 1. Delete from S3 (checks both with and without policies/ prefix)
+        # 1. Delete from S3
         for s3_key in [f"policies/{base_name}", base_name]:
             try:
                 s3.delete_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
@@ -142,11 +140,11 @@ def delete_policy_everywhere(filename: str) -> bool:
             except Exception:
                 pass
 
-        # 2. Robust Deletion from PostgreSQL pgvector
+        # 2. Delete from PostgreSQL (both policy_vectors and policies tables)
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
         
-        # Matches exact filename, partial path, or filename within JSON metadata
+        # Robust case-insensitive deletion across vector chunks
         cur.execute(
             """
             DELETE FROM policy_vectors 
@@ -157,7 +155,7 @@ def delete_policy_everywhere(filename: str) -> bool:
         )
         deleted_chunks = cur.rowcount
 
-        # Also remove from relational policies tracking table
+        # Remove from administrative tracking table
         try:
             cur.execute(
                 "DELETE FROM policies WHERE filename ILIKE %s OR s3_key ILIKE %s;",
@@ -172,10 +170,8 @@ def delete_policy_everywhere(filename: str) -> bool:
 
         logger.info(f"PGVECTOR_CHUNKS_DELETED | rows_removed={deleted_chunks}")
 
-        # 3. Clear Redis Semantic Cache
+        # 3. Clear Redis Cache & force reload BM25 in RAM
         clear_semantic_cache()
-
-        # 4. Force Reload BM25 Sparse Index in RAM
         load_indexes(force_reload=True)
         return True
 

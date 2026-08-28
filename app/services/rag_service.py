@@ -2,7 +2,7 @@
 
 Includes Native PostgreSQL pgvector + BM25 Hybrid Search, Math RRF Re-Ranking,
 Semantic Redis Caching, Instant Groq Failover on 429 Quota, Raw Chunk Fallback,
-Artifact/Reasoning Stripping, and Langfuse Observability.
+Strict Similarity Guards, and Langfuse Observability.
 Location: app/services/rag_service.py
 """
 
@@ -38,7 +38,6 @@ except Exception as e:
     logger.warning(f"GROQ_INIT_FAILED | {e}")
     groq_client = None
 
-# Global references
 DATABASE_URL = os.getenv("DATABASE_URL")
 embeddings_model = FastEmbedEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2"
@@ -46,7 +45,7 @@ embeddings_model = FastEmbedEmbeddings(
 bm25_index = None
 all_docs = []
 
-DENSE_SIMILARITY_THRESHOLD = 0.40  # Minimum cosine similarity cutoff
+DENSE_SIMILARITY_THRESHOLD = 0.40  # Cosine similarity filter cutoff
 
 
 def load_indexes(force_reload: bool = False):
@@ -84,7 +83,7 @@ def load_indexes(force_reload: bool = False):
 
 
 def pgvector_dense_search(query_vec: List[float], top_k: int = 6) -> List[Document]:
-    """Performs native HNSW cosine distance search with strict similarity cutoff."""
+    """Performs native HNSW cosine distance search (<=>) directly in PostgreSQL."""
     if not DATABASE_URL:
         return []
     try:
@@ -151,12 +150,12 @@ def hybrid_retrieve(
     sparse_docs = []
 
     for q in queries:
-        # 1. Postgres pgvector dense retrieval (Filtered by similarity >= 0.40)
+        # 1. Native Postgres pgvector dense retrieval
         q_vec = list(embeddings_model.embed_query(q))
         d_docs = pgvector_dense_search(q_vec, top_k=top_k)
         dense_docs.extend(d_docs)
 
-        # 2. BM25 sparse retrieval (Filtered by positive score only)
+        # 2. In-memory BM25 sparse retrieval
         if bm25_index and all_docs:
             tokenized_q = q.lower().split()
             bm25_scores = bm25_index.get_scores(tokenized_q)
@@ -346,7 +345,7 @@ def execute_llm_with_backoff_failover(
                 err_str = str(err)
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                     logger.warning("GEMINI_QUOTA_EXHAUSTED | Immediate failover to Groq ⚡")
-                    break  # Break directly to Tier 2 without sleeping
+                    break  # Failover immediately without sleep
 
                 sleep_duration = (0.5 * (2**attempt)) + random.uniform(0.1, 0.4)
                 logger.warning(f"GEMINI_RETRY | attempt={attempt+1} | error={err}")
@@ -377,6 +376,7 @@ def execute_llm_with_backoff_failover(
 
 
 def handle_rag_query(employee, query: str, collection_unused, gemini_client):
+    """Handles end-to-end RAG query flow with Cache, pgvector, LLMs, and Raw Chunks Fallback."""
     start_time = time.time()
     sender = employee["whatsapp"]
     employee_id = employee.get("employee_id") or "UNKNOWN_EMP"
@@ -407,8 +407,8 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
         expanded_queries = multi_query_expansion(query, gemini_client)
         dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(expanded_queries, top_k=6)
 
-        # STRICT GUARD: If no documents pass the similarity cutoff >= 0.40, STOP IMMEDIATELY
-        if not dense_docs or not all_retrieved:
+        # Early Guard: If policy is not found or deleted (no vectors passed similarity threshold)
+        if not all_retrieved or not dense_docs:
             latency_ms = (time.time() - start_time) * 1000
             not_found_msg = "❌ This information is not covered in our official policy documents."
             send_text(sender, not_found_msg)
@@ -427,7 +427,6 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
 
         context, citation_footer, top_docs = math_rrf_rerank(dense_docs, sparse_docs, top_k=3)
 
-        # Double Check: If context is empty after reranking
         if not context.strip():
             not_found_msg = "❌ This information is not covered in our official policy documents."
             send_text(sender, not_found_msg)
@@ -456,12 +455,18 @@ Card Response:"""
         # 3. Cascading LLM Execution
         response_text, tokens_used, model_used = execute_llm_with_backoff_failover(gemini_client, prompt)
 
-        # 4. Handle Result & Clean Semantic Cache Guard
+        # 4. Handle Result & Clean Cache Guard
         if not response_text or "❌" in response_text or "not covered" in response_text.lower():
             final_whatsapp_msg = "❌ This information is not covered in our official policy documents."
             send_text(sender, final_whatsapp_msg)
+        elif model_used == "none":
+            # Both LLMs failed -> Serve raw chunks fallback
+            logger.warning(f"LLM_OUTAGE_TRIGGERED_RAW_FALLBACK | user={employee_id}")
+            raw_fallback_text, raw_footer = format_raw_chunks_fallback(top_docs)
+            final_whatsapp_msg = f"{raw_fallback_text}{raw_footer}"
+            send_text(sender, final_whatsapp_msg)
+            response_text = raw_fallback_text
         else:
-            # ONLY save to Redis if it is a verified, positive policy answer
             save_semantic_cached_answer(query, response_text, citation_footer)
             add_to_chat_history(employee_id, query, response_text)
             final_whatsapp_msg = f"{response_text}{citation_footer}"

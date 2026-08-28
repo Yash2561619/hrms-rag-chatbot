@@ -86,6 +86,18 @@ def get_salary_queue():
         return None
 
 
+def run_async_task(target_func, *args):
+    """Executes a long-running task in a daemon thread safely."""
+    def wrapper():
+        try:
+            target_func(*args)
+        except Exception as e:
+            logger.error(f"ASYNC_TASK_FAILED | func={target_func.__name__} | error={e}")
+
+    t = threading.Thread(target=wrapper, daemon=True)
+    t.start()
+
+
 # =====================================================
 # AUTH & DASHBOARD
 # =====================================================
@@ -482,11 +494,7 @@ def bulk_upload_salary():
                 "info",
             )
         else:
-            threading.Thread(
-                target=process_bulk_salary_slips_job,
-                args=(zip_bytes,),
-                daemon=True,
-            ).start()
+            run_async_task(process_bulk_salary_slips_job, zip_bytes)
             flash("⏳ Bulk salary processing started in background thread.", "info")
 
     except Exception as e:
@@ -540,13 +548,13 @@ def delete_salary_route(id):
 
 
 # =====================================================
-# POLICY MANAGEMENT (Threaded Ingestion & Deletion)
+# POLICY MANAGEMENT (Non-blocking Fast Response)
 # =====================================================
 
 @admin_bp.route("/policy-management", methods=["GET", "POST"])
 @login_required
 def policy_management():
-    """Manage HR policies with S3 upload and asynchronous pgvector background indexing."""
+    """Manage HR policies with instant UI return and asynchronous background indexing."""
     if request.method == "POST":
         file = request.files.get("policy")
         if not file or not file.filename.lower().endswith(".pdf"):
@@ -556,13 +564,13 @@ def policy_management():
         try:
             filename = secure_filename(file.filename)
 
-            # 1. Upload original PDF to S3
+            # 1. Upload original PDF to S3 (<1s)
             s3_key = upload_policy_to_s3(file, filename)
             if not s3_key:
                 flash("❌ S3 upload failed. Check AWS storage settings.", "danger")
                 return redirect(url_for("admin.policy_management"))
 
-            # 2. Record policy entry in relational database
+            # 2. Record policy metadata in main database
             save_policy_file(
                 file_name=filename,
                 s3_key=s3_key,
@@ -570,16 +578,12 @@ def policy_management():
                 file_hash="",
             )
 
-            # 3. Trigger asynchronous background extraction & vector indexing
-            threading.Thread(
-                target=sync_new_policy_from_s3,
-                args=(s3_key,),
-                daemon=True,
-            ).start()
+            # 3. Dispatch vectorization asynchronously (Returns HTTP 200/Redirect immediately)
+            run_async_task(sync_new_policy_from_s3, s3_key)
 
             log_activity(f"📚 Policy uploaded & background indexing started: {filename}")
             flash(
-                "✅ Policy uploaded! Vector embeddings and BM25 index are being generated in the background.",
+                f"✅ Policy '{filename}' uploaded! Vector embeddings and BM25 index are being generated in the background.",
                 "success",
             )
             return redirect(url_for("admin.policy_management"))
@@ -595,19 +599,15 @@ def policy_management():
 @admin_bp.route("/delete-policy/<path:filename>", methods=["GET", "POST"])
 @login_required
 def delete_policy(filename):
-    """Delete policy with asynchronous cleanup of S3, vectors, and Redis cache."""
+    """Delete policy with non-blocking async cleanup of S3, vectors, and Redis cache."""
     try:
         clean_name = secure_filename(filename)
 
         # 1. Remove from relational tracking
         delete_policy_file(clean_name)
 
-        # 2. Asynchronously delete from S3, pgvector table, and flush Redis cache
-        threading.Thread(
-            target=delete_policy_everywhere,
-            args=(clean_name,),
-            daemon=True,
-        ).start()
+        # 2. Dispatch cleanup in background
+        run_async_task(delete_policy_everywhere, clean_name)
 
         log_activity(f"🗑️ Deleted policy: {clean_name}")
         flash(f"✅ Policy '{clean_name}' removal and index re-synchronization scheduled.", "success")

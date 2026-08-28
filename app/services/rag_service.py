@@ -2,7 +2,7 @@
 
 Includes Native PostgreSQL pgvector + BM25 Hybrid Search, Math RRF Re-Ranking,
 Semantic Redis Caching, Instant Groq Failover on 429 Quota, Raw Chunk Fallback,
-Strict Similarity Guards, and Langfuse Observability.
+Strict Similarity Guards, In-Memory Reset on Force Reload, and Langfuse Observability.
 Location: app/services/rag_service.py
 """
 
@@ -49,7 +49,10 @@ DENSE_SIMILARITY_THRESHOLD = 0.40  # Cosine similarity filter cutoff
 
 
 def load_indexes(force_reload: bool = False):
-    """Loads documents from PostgreSQL pgvector into RAM for BM25 sparse matching."""
+    """Loads documents from PostgreSQL pgvector into RAM for BM25 sparse matching.
+    
+    Completely resets in-memory structures to guarantee exact sync with PostgreSQL.
+    """
     global bm25_index, all_docs
 
     if (bm25_index is None or force_reload) and DATABASE_URL:
@@ -59,10 +62,13 @@ def load_indexes(force_reload: bool = False):
             cur.execute("SELECT content, metadata FROM policy_vectors;")
             rows = cur.fetchall()
 
-            all_docs = [
+            # COMPLETELY reset all_docs in memory before assigning new rows
+            fresh_docs = [
                 Document(page_content=r[0], metadata=r[1] if r[1] else {})
                 for r in rows
             ]
+            all_docs = fresh_docs
+
             tokenized_corpus = [
                 doc.page_content.lower().split() for doc in all_docs
             ]
@@ -75,6 +81,7 @@ def load_indexes(force_reload: bool = False):
             else:
                 bm25_index = None
                 all_docs = []
+                logger.info("PGVECTOR_AND_BM25_CLEARED ✅ | 0 documents in index")
 
             cur.close()
             conn.close()

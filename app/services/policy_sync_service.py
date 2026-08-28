@@ -1,10 +1,12 @@
 """Automated Policy Ingestion and Deletion Service.
+
 Location: app/services/policy_sync_service.py
 """
 
 import logging
 import os
 import tempfile
+
 import boto3
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
@@ -35,6 +37,7 @@ def get_embeddings_model():
 
 
 def get_s3_client():
+    """Lazily initializes and returns S3 client."""
     return boto3.client(
         "s3",
         aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
@@ -45,7 +48,7 @@ def get_s3_client():
 
 def sync_new_policy_from_s3(s3_key: str) -> bool:
     """Downloads PDF from S3, generates embeddings, and inserts into PostgreSQL."""
-    filename = os.path.basename(s3_key)
+    filename = os.path.basename(s3_key).strip()
     logger.info(f"POLICY_INGEST_START | file={filename}")
 
     s3 = get_s3_client()
@@ -94,8 +97,12 @@ def sync_new_policy_from_s3(s3_key: str) -> bool:
 
         # Remove previous versions of this policy if already present
         cur.execute(
-            "DELETE FROM policy_vectors WHERE metadata->>'source' ILIKE %s;",
-            (f"%{filename}%",)
+            """
+            DELETE FROM policy_vectors 
+            WHERE metadata->>'source' ILIKE %s 
+               OR metadata->>'source' ILIKE %s;
+            """,
+            (f"%{filename}%", f"%{filename.replace('.pdf', '')}%"),
         )
 
         execute_values(
@@ -110,7 +117,9 @@ def sync_new_policy_from_s3(s3_key: str) -> bool:
         cur.close()
         conn.close()
 
-        logger.info(f"POLICY_INGEST_SUCCESS ✅ | Ingested {len(records)} chunks for {filename}")
+        logger.info(
+            f"POLICY_INGEST_SUCCESS ✅ | Ingested {len(records)} chunks for {filename}"
+        )
 
         # 5. Invalidate stale cache & force reload in-memory BM25 index
         clear_semantic_cache()
@@ -132,7 +141,7 @@ def delete_policy_everywhere(filename: str) -> bool:
     base_name = os.path.basename(filename).strip()
 
     try:
-        # 1. Delete from S3
+        # 1. Delete from S3 (checking both path variations)
         for s3_key in [f"policies/{base_name}", base_name]:
             try:
                 s3.delete_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
@@ -143,7 +152,7 @@ def delete_policy_everywhere(filename: str) -> bool:
         # 2. Delete from PostgreSQL (both policy_vectors and policies tables)
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
-        
+
         # Robust case-insensitive deletion across vector chunks
         cur.execute(
             """
@@ -159,7 +168,7 @@ def delete_policy_everywhere(filename: str) -> bool:
         try:
             cur.execute(
                 "DELETE FROM policies WHERE filename ILIKE %s OR s3_key ILIKE %s;",
-                (f"%{base_name}%", f"%{base_name}%")
+                (f"%{base_name}%", f"%{base_name}%"),
             )
         except Exception:
             pass

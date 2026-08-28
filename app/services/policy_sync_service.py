@@ -11,19 +11,15 @@ from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import psycopg2
 from psycopg2.extras import execute_values
-from redis import Redis
-from app.services.semantic_cache_service import clear_semantic_cache
 
-# Invalidate cache when policies change
-clear_semantic_cache()
 from app.services.rag_service import load_indexes
+from app.services.semantic_cache_service import clear_semantic_cache
 
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-REDIS_URL = os.getenv("REDIS_URL")
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME") or os.getenv("AWS_BUCKET_NAME")
-AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
+AWS_REGION = os.getenv("AWS_REGION", "ap-southeast-2")
 
 _embeddings_model = None
 
@@ -45,20 +41,6 @@ def get_s3_client():
         aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
         region_name=AWS_REGION,
     )
-
-
-def invalidate_redis_semantic_cache():
-    """Flushes all cached policy answers from Redis."""
-    if not REDIS_URL:
-        return
-    try:
-        r = Redis.from_url(REDIS_URL)
-        keys = r.keys("semantic_cache:*")
-        if keys:
-            r.delete(*keys)
-            logger.info(f"CACHE_INVALIDATED ✅ | Deleted {len(keys)} cached entries.")
-    except Exception as e:
-        logger.error(f"CACHE_INVALIDATION_ERROR | {e}")
 
 
 def sync_new_policy_from_s3(s3_key: str) -> bool:
@@ -131,7 +113,7 @@ def sync_new_policy_from_s3(s3_key: str) -> bool:
         logger.info(f"POLICY_INGEST_SUCCESS ✅ | Ingested {len(records)} chunks for {filename}")
 
         # 5. Invalidate stale cache & force reload in-memory BM25 index
-        invalidate_redis_semantic_cache()
+        clear_semantic_cache()
         load_indexes(force_reload=True)
         return True
 
@@ -157,22 +139,34 @@ def delete_policy_everywhere(filename: str) -> bool:
         except Exception as s3_err:
             logger.warning(f"S3_DELETE_WARNING | {s3_err}")
 
-        # 2. Delete from PostgreSQL pgvector
+        # 2. Delete from PostgreSQL (both policy_vectors and policies tables)
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
+        
+        # Remove vector chunks
         cur.execute(
             "DELETE FROM policy_vectors WHERE metadata->>'source' LIKE %s;",
             (f"%{filename}%",)
         )
-        deleted_count = cur.rowcount
+        deleted_chunks = cur.rowcount
+
+        # Remove from administrative tracking table if it exists
+        try:
+            cur.execute(
+                "DELETE FROM policies WHERE filename = %s OR s3_key LIKE %s;",
+                (filename, f"%{filename}%")
+            )
+        except Exception:
+            pass
+
         conn.commit()
         cur.close()
         conn.close()
 
-        logger.info(f"PGVECTOR_CHUNKS_DELETED | rows_removed={deleted_count}")
+        logger.info(f"PGVECTOR_CHUNKS_DELETED | rows_removed={deleted_chunks}")
 
-        # 3. Clear Redis Cache & force reload BM25
-        invalidate_redis_semantic_cache()
+        # 3. Clear Redis Cache & force reload BM25 in RAM
+        clear_semantic_cache()
         load_indexes(force_reload=True)
         return True
 

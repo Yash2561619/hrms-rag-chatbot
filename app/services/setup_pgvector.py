@@ -4,14 +4,22 @@ Location: app/services/setup_pgvector.py
 
 import os
 import sys
+
+# Ensure root directory is in sys.path when script is executed directly
+PROJECT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..")
+)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import tempfile
 import boto3
 from dotenv import load_dotenv
-import psycopg2
-from psycopg2.extras import execute_values
 from langchain_community.document_loaders import PyPDFDirectoryLoader
 from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+import psycopg2
+from psycopg2.extras import execute_values
 
 from app.services.semantic_cache_service import clear_semantic_cache
 
@@ -20,7 +28,7 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
-AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
+AWS_REGION = os.getenv("AWS_REGION", "ap-southeast-2")
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME") or os.getenv("AWS_BUCKET_NAME")
 S3_POLICY_PREFIX = os.getenv("S3_POLICY_PREFIX", "policies/")
 
@@ -62,7 +70,7 @@ conn.commit()
 # -------------------------------------------------------------------------
 # 2. Download Policy PDFs from AWS S3 into a Temporary Directory
 # -------------------------------------------------------------------------
-print(f"☁️  Connecting to S3 Bucket: {S3_BUCKET_NAME}...")
+print(f"☁️  Connecting to S3 Bucket: {S3_BUCKET_NAME} ({AWS_REGION})...")
 s3_client = boto3.client(
     "s3",
     aws_access_key_id=AWS_ACCESS_KEY_ID,

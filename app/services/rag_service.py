@@ -1,8 +1,8 @@
 """Advanced RAG Service for HR Policy Queries.
 
 Includes Native PostgreSQL pgvector + BM25 Hybrid Search, Math RRF Re-Ranking,
-Semantic Redis Caching, Exponential Backoff with Jitter, Dynamic Groq Failover,
-Strict Similarity Guards, and Langfuse Observability.
+Semantic Redis Caching, Instant Groq Failover on 429 Quota, Raw Chunk Fallback,
+Artifact/Reasoning Stripping, and Langfuse Observability.
 Location: app/services/rag_service.py
 """
 
@@ -115,30 +115,29 @@ def pgvector_dense_search(query_vec: List[float], top_k: int = 6) -> List[Docume
 
 def multi_query_expansion(query: str, gemini_client) -> list[str]:
     """Generates query variations to improve search recall."""
+    if not gemini_client:
+        return [query]
+
     prompt = f"""Generate 2 alternative search queries for an HR policy search.
 Original Query: "{query}"
 Output format: Return ONLY the queries separated by newlines, no bullet points or extra text."""
-    for attempt in range(2):
-        try:
-            res = gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.5,
-                    max_output_tokens=60,
-                    top_p=0.9,
-                ),
-            )
+    try:
+        res = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.5,
+                max_output_tokens=60,
+                top_p=0.9,
+            ),
+        )
+        if res and res.text:
             variations = [
                 q.strip() for q in res.text.strip().split("\n") if q.strip()
             ]
             return [query] + variations[:2]
-        except Exception as e:
-            if attempt == 0:
-                time.sleep(0.3 + random.uniform(0.1, 0.3))
-            else:
-                logger.warning(f"MULTI_QUERY_EXPANSION_SKIPPED | {e}")
-                return [query]
+    except Exception as e:
+        logger.warning(f"MULTI_QUERY_EXPANSION_SKIPPED | {e}")
 
     return [query]
 
@@ -225,6 +224,60 @@ def math_rrf_rerank(
     return context, citation_footer, top_docs
 
 
+def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
+    """Cleans and formats retrieved chunks into a bulleted list if all LLMs fail."""
+    if not chunks:
+        return (
+            "❌ I couldn't find any relevant policy information for your question.",
+            "",
+        )
+
+    clean_sentences = []
+    seen = set()
+    sources_set = set()
+
+    for doc in chunks[:4]:
+        source_file = doc.metadata.get("source", "")
+        page_num = doc.metadata.get("page", "")
+        if source_file and "INDEX" not in source_file.upper():
+            clean_name = os.path.basename(source_file)
+            clean_name = re.sub(r"^\d+_", "", clean_name)
+            clean_name = clean_name.replace(".pdf", "").replace("_", " ")
+            page_text = f" (Page {page_num})" if page_num else ""
+            sources_set.add(f"{clean_name}{page_text}")
+
+        text = re.sub(r"\s+", " ", doc.page_content).strip()
+
+        for sentence in text.split(". "):
+            sentence = sentence.strip()
+            if len(sentence) > 25 and sentence.lower() not in seen:
+                seen.add(sentence.lower())
+                clean_sentences.append(sentence)
+                if len(clean_sentences) >= 5:
+                    break
+        if len(clean_sentences) >= 5:
+            break
+
+    bullet_points = (
+        "\n".join([f"• {s}." for s in clean_sentences])
+        if clean_sentences
+        else "• Details are available in the official policy document."
+    )
+    citation_footer = (
+        "\n━━━━━━━━━━━━━━━━━━━\n📁 *Source:* " + ", ".join(sorted(sources_set))
+        if sources_set
+        else ""
+    )
+
+    fallback_text = (
+        "📋 *Policy Excerpts (High Traffic Mode)*\n━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{bullet_points}\n\n"
+        "_Please ask again in a moment for a synthesized summary._"
+    )
+
+    return fallback_text, citation_footer
+
+
 def clean_reasoning_and_artifacts(text: str) -> str:
     """Strips <think> tags and excessive formatting artifacts."""
     if not text:
@@ -263,39 +316,50 @@ def is_valid_hr_response(text: str) -> bool:
 def execute_llm_with_backoff_failover(
     gemini_client, prompt: str
 ) -> Tuple[Optional[str], dict, str]:
-    """Cascading Execution: Gemini 2.5 Flash -> Dynamic Groq."""
-    max_retries = 2
-    base_delay = 0.5
+    """Cascading Execution: Gemini 2.5 Flash -> Dynamic Groq with Instant 429 Failover."""
 
-    for attempt in range(max_retries):
-        try:
-            response = gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.2,  # Low temperature for strict adherence
-                    max_output_tokens=700,
-                    top_p=0.85,
-                ),
-            )
-            if response and response.text:
-                cleaned_text = clean_reasoning_and_artifacts(response.text)
-                if is_valid_hr_response(cleaned_text):
-                    tokens_used = {
-                        "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) or 0,
-                        "completion_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) or 0,
-                        "total_tokens": getattr(response.usage_metadata, "total_token_count", 0) or 0,
-                    }
-                    return cleaned_text, tokens_used, "gemini-2.5-flash"
-        except Exception as err:
-            sleep_duration = (base_delay * (2**attempt)) + random.uniform(0.1, 0.4)
-            logger.warning(f"GEMINI_RETRY | attempt={attempt+1} | error={err}")
-            time.sleep(sleep_duration)
+    # ---------------------------------------------------------
+    # Tier 1: Gemini 2.5 Flash
+    # ---------------------------------------------------------
+    if gemini_client:
+        for attempt in range(2):
+            try:
+                response = gemini_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.2,
+                        max_output_tokens=700,
+                        top_p=0.85,
+                    ),
+                )
+                if response and response.text:
+                    cleaned_text = clean_reasoning_and_artifacts(response.text)
+                    if is_valid_hr_response(cleaned_text):
+                        tokens_used = {
+                            "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) or 0,
+                            "completion_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) or 0,
+                            "total_tokens": getattr(response.usage_metadata, "total_token_count", 0) or 0,
+                        }
+                        return cleaned_text, tokens_used, "gemini-2.5-flash"
+            except Exception as err:
+                err_str = str(err)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    logger.warning("GEMINI_QUOTA_EXHAUSTED | Immediate failover to Groq ⚡")
+                    break  # Break directly to Tier 2 without sleeping
 
+                sleep_duration = (0.5 * (2**attempt)) + random.uniform(0.1, 0.4)
+                logger.warning(f"GEMINI_RETRY | attempt={attempt+1} | error={err}")
+                time.sleep(sleep_duration)
+
+    # ---------------------------------------------------------
+    # Tier 2: Groq Failover
+    # ---------------------------------------------------------
     if groq_client:
         selected_model = get_active_groq_model()
         if selected_model:
             try:
+                logger.info(f"ROUTING_TO_SECONDARY_LLM | groq/{selected_model} ⚡")
                 chat_completion = groq_client.chat.completions.create(
                     model=selected_model,
                     messages=[{"role": "user", "content": prompt}],
@@ -307,13 +371,13 @@ def execute_llm_with_backoff_failover(
                 if is_valid_hr_response(cleaned_content):
                     return cleaned_content, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, selected_model
             except Exception as groq_err:
-                logger.warning(f"GROQ_FAILED | error={groq_err}")
+                logger.warning(f"GROQ_FAILOVER_ERROR | {groq_err}")
 
     return None, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, "none"
 
 
 def handle_rag_query(employee, query: str, collection_unused, gemini_client):
-    """Handles end-to-end RAG flow with strict relevance guards."""
+    """Handles end-to-end RAG query flow with Cache, pgvector, LLMs, and Raw Chunks Fallback."""
     start_time = time.time()
     sender = employee["whatsapp"]
     employee_id = employee.get("employee_id") or "UNKNOWN_EMP"
@@ -339,12 +403,12 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
             )
             return
 
-        # 2. Hybrid Retrieval with Score Thresholds
+        # 2. Hybrid Retrieval with Score Filter
         chat_history_str = get_chat_history(employee_id, max_messages=4)
         expanded_queries = multi_query_expansion(query, gemini_client)
         dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(expanded_queries, top_k=6)
 
-        # Early Guard: If no retrieved documents pass the similarity threshold
+        # Early Guard: If policy is not found or deleted (no vectors passed similarity threshold)
         if not all_retrieved or not dense_docs:
             latency_ms = (time.time() - start_time) * 1000
             not_found_msg = "❌ This information is not covered in our official policy documents."
@@ -364,7 +428,6 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
 
         context, citation_footer, top_docs = math_rrf_rerank(dense_docs, sparse_docs, top_k=3)
 
-        # 3. Grounded Prompt Formulation
         prompt = f"""You are an AI HR Assistant. Answer the question using ONLY the provided HR Policy Excerpts.
 DO NOT use outside knowledge or make assumptions. If the answer is not explicitly stated in the excerpts, respond ONLY with:
 "❌ This information is not covered in our official policy documents."
@@ -388,22 +451,32 @@ EMPLOYEE QUESTION:
 
 Card Response:"""
 
+        # 3. Cascading LLM Execution
         response_text, tokens_used, model_used = execute_llm_with_backoff_failover(gemini_client, prompt)
 
-        if not response_text or "❌" in response_text:
-            final_response = "❌ This information is not covered in our official policy documents."
-            send_text(sender, final_response)
+        # 4. Handle Result & Fallback
+        if response_text and "❌" in response_text:
+            final_whatsapp_msg = "❌ This information is not covered in our official policy documents."
+            send_text(sender, final_whatsapp_msg)
+        elif not response_text or model_used == "none":
+            # Both LLMs failed (quota / network issue) -> Serve raw chunks fallback
+            logger.warning(f"LLM_OUTAGE_TRIGGERED_RAW_FALLBACK | user={employee_id}")
+            raw_fallback_text, raw_footer = format_raw_chunks_fallback(top_docs)
+            final_whatsapp_msg = f"{raw_fallback_text}{raw_footer}"
+            send_text(sender, final_whatsapp_msg)
+            response_text = raw_fallback_text
         else:
             save_semantic_cached_answer(query, response_text, citation_footer)
             add_to_chat_history(employee_id, query, response_text)
-            send_text(sender, f"{response_text}{citation_footer}")
+            final_whatsapp_msg = f"{response_text}{citation_footer}"
+            send_text(sender, final_whatsapp_msg)
 
         latency_ms = (time.time() - start_time) * 1000
         trace_rag_interaction(
             user_id=employee_id,
             session_id=session_id,
             query_text=query,
-            response_text=response_text or "Not covered",
+            response_text=response_text or "No answer",
             latency_ms=latency_ms,
             cache_hit=False,
             tokens_used=tokens_used,
@@ -413,4 +486,7 @@ Card Response:"""
 
     except Exception:
         logger.exception(f"RAG_FATAL_ERROR | user={employee_id}")
-        send_text(sender, "❌ An error occurred while retrieving policy details. Please try again later.")
+        send_text(
+            sender,
+            "❌ An error occurred while retrieving policy details. Please try again later.",
+        )

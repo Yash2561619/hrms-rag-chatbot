@@ -3,10 +3,11 @@
 Location: app/routes/admin_routes.py
 """
 
+from datetime import datetime
 from functools import wraps
 import logging
 import os
-from datetime import datetime
+import threading
 
 import boto3
 from flask import (
@@ -24,16 +25,16 @@ from rq import Queue
 from werkzeug.utils import secure_filename
 
 from app.services.auth_service import authenticate_admin
+from app.services.policy_sync_service import (
+    delete_policy_everywhere,
+    sync_new_policy_from_s3,
+)
 from app.services.s3_service import (
     delete_file_from_s3,
     generate_presigned_url,
     upload_policy_to_s3,
     upload_salary_to_s3,
     upload_video_to_s3,
-)
-from app.services.policy_sync_service import (
-    sync_new_policy_from_s3,
-    delete_policy_everywhere,
 )
 from app.services.whatsapp_service import send_text
 from app.tasks.salary_tasks import process_bulk_salary_slips_job
@@ -73,18 +74,16 @@ logger = logging.getLogger(__name__)
 
 admin_bp = Blueprint("admin", __name__)
 
-S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
-s3_client = boto3.client(
-    "s3",
-    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-    region_name=os.getenv("AWS_REGION"),
-)
 
-# Redis Queue Connection for Background Tasks
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-redis_conn = Redis.from_url(REDIS_URL)
-salary_task_queue = Queue("hr_tasks", connection=redis_conn)
+def get_salary_queue():
+    """Lazily initializes the Redis Queue for bulk jobs."""
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    try:
+        redis_conn = Redis.from_url(redis_url)
+        return Queue("hr_tasks", connection=redis_conn)
+    except Exception as e:
+        logger.warning(f"REDIS_QUEUE_INIT_FAILED | {e}")
+        return None
 
 
 # =====================================================
@@ -460,7 +459,7 @@ def upload_salary():
 @admin_bp.route("/upload-bulk-salary", methods=["POST"])
 @login_required
 def bulk_upload_salary():
-    """Extracts salary PDFs from a ZIP file and enqueues background processing via RQ."""
+    """Extracts salary PDFs from a ZIP file and enqueues background processing."""
     zip_file = request.files.get("salary_zip")
 
     if not zip_file or not zip_file.filename.lower().endswith(".zip"):
@@ -469,19 +468,27 @@ def bulk_upload_salary():
 
     try:
         zip_bytes = zip_file.read()
+        queue = get_salary_queue()
 
-        job = salary_task_queue.enqueue(
-            process_bulk_salary_slips_job,
-            args=(zip_bytes,),
-            job_timeout=600,
-        )
+        if queue:
+            job = queue.enqueue(
+                process_bulk_salary_slips_job,
+                args=(zip_bytes,),
+                job_timeout=600,
+            )
+            job_short_id = str(job.id)[:8] if job and job.id else "active"
+            flash(
+                f"⏳ Bulk salary processing queued in background! (Job ID: {job_short_id})",
+                "info",
+            )
+        else:
+            threading.Thread(
+                target=process_bulk_salary_slips_job,
+                args=(zip_bytes,),
+                daemon=True,
+            ).start()
+            flash("⏳ Bulk salary processing started in background thread.", "info")
 
-        job_short_id = str(job.id)[:8] if job and job.id else "active"
-
-        flash(
-            f"⏳ Bulk salary processing queued in background! (Job ID: {job_short_id})",
-            "info",
-        )
     except Exception as e:
         logger.exception("BULK_SALARY_ENQUEUE_ERROR")
         flash(f"❌ Failed to queue bulk upload: {str(e)}", "danger")
@@ -533,13 +540,13 @@ def delete_salary_route(id):
 
 
 # =====================================================
-# POLICY MANAGEMENT (PostgreSQL + pgvector Integration)
+# POLICY MANAGEMENT (Threaded Ingestion & Deletion)
 # =====================================================
 
 @admin_bp.route("/policy-management", methods=["GET", "POST"])
 @login_required
 def policy_management():
-    """Manage HR policies with AWS S3 storage and automated pgvector indexing."""
+    """Manage HR policies with S3 upload and asynchronous pgvector background indexing."""
     if request.method == "POST":
         file = request.files.get("policy")
         if not file or not file.filename.lower().endswith(".pdf"):
@@ -549,10 +556,13 @@ def policy_management():
         try:
             filename = secure_filename(file.filename)
 
-            # 1. Upload to S3
+            # 1. Upload original PDF to S3
             s3_key = upload_policy_to_s3(file, filename)
+            if not s3_key:
+                flash("❌ S3 upload failed. Check AWS storage settings.", "danger")
+                return redirect(url_for("admin.policy_management"))
 
-            # 2. Record policy metadata in main database
+            # 2. Record policy entry in relational database
             save_policy_file(
                 file_name=filename,
                 s3_key=s3_key,
@@ -560,15 +570,18 @@ def policy_management():
                 file_hash="",
             )
 
-            # 3. Stream from S3, vectorize with FastEmbed, and insert into pgvector
-            synced = sync_new_policy_from_s3(s3_key)
-            log_activity(f"📚 Policy uploaded & vectorized: {filename}")
+            # 3. Trigger asynchronous background extraction & vector indexing
+            threading.Thread(
+                target=sync_new_policy_from_s3,
+                args=(s3_key,),
+                daemon=True,
+            ).start()
 
-            if synced:
-                flash("✅ Policy uploaded and indexed into pgvector successfully!", "success")
-            else:
-                flash("⚠️ Policy uploaded to S3, but vector indexing encountered an issue.", "warning")
-
+            log_activity(f"📚 Policy uploaded & background indexing started: {filename}")
+            flash(
+                "✅ Policy uploaded! Vector embeddings and BM25 index are being generated in the background.",
+                "success",
+            )
             return redirect(url_for("admin.policy_management"))
 
         except Exception as e:
@@ -582,18 +595,22 @@ def policy_management():
 @admin_bp.route("/delete-policy/<path:filename>", methods=["GET", "POST"])
 @login_required
 def delete_policy(filename):
-    """Delete policy from S3, pgvector table, PostgreSQL metadata, and clear Redis cache."""
+    """Delete policy with asynchronous cleanup of S3, vectors, and Redis cache."""
     try:
         clean_name = secure_filename(filename)
 
-        # 1. Delete from main app database registry
+        # 1. Remove from relational tracking
         delete_policy_file(clean_name)
 
-        # 2. Delete from S3, purge vector embeddings from PostgreSQL, and invalidate Redis cache
-        delete_policy_everywhere(clean_name)
+        # 2. Asynchronously delete from S3, pgvector table, and flush Redis cache
+        threading.Thread(
+            target=delete_policy_everywhere,
+            args=(clean_name,),
+            daemon=True,
+        ).start()
 
         log_activity(f"🗑️ Deleted policy: {clean_name}")
-        flash(f"✅ Successfully deleted {clean_name} from S3, database, and vector index.", "success")
+        flash(f"✅ Policy '{clean_name}' removal and index re-synchronization scheduled.", "success")
     except Exception as e:
         logger.error(f"DELETE_POLICY_FAILED | file={filename} | error={e}")
         flash(f"❌ Failed to delete {filename}: {str(e)}", "danger")

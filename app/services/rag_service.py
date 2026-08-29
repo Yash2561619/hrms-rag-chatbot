@@ -272,7 +272,7 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
 
     fallback_text = (
         "📋 *Policy Information*\n━━━━━━━━━━━━━━━━━━━\n"
-        "📌 *Policy Details:*\n"
+        "📌 *Key Details:*\n"
         f"{bullet_points}"
     )
 
@@ -327,7 +327,7 @@ def execute_llm_with_backoff_failover(
     """Cascading Execution: Gemini 2.5 Flash -> Dynamic Groq with Instant 429/503 Failover."""
 
     # ---------------------------------------------------------
-    # Tier 1: Gemini 2.5 Flash (500 tokens ceiling)
+    # Tier 1: Gemini 2.5 Flash
     # ---------------------------------------------------------
     if gemini_client:
         for attempt in range(2):
@@ -366,7 +366,7 @@ def execute_llm_with_backoff_failover(
                 time.sleep(sleep_duration)
 
     # ---------------------------------------------------------
-    # Tier 2: Groq Failover (500 tokens ceiling)
+    # Tier 2: Groq Failover
     # ---------------------------------------------------------
     if groq_client:
         selected_model = get_active_groq_model()
@@ -421,7 +421,7 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
         expanded_queries = multi_query_expansion(query, gemini_client)
         dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(expanded_queries, top_k=8)
 
-        # Early Guard
+        # Early Guard: If no relevant vectors or keyword matches were retrieved
         if not all_retrieved:
             latency_ms = (time.time() - start_time) * 1000
             not_found_msg = "❌ This information is not covered in our official policy documents."
@@ -446,9 +446,6 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
             send_text(sender, not_found_msg)
             return
 
-        # Exact Card Response Structure
-        # In app/services/rag_service.py -> inside handle_rag_query()
-
         prompt = f"""You are an AI HR Assistant. Answer the employee's question using ONLY the provided Policy Excerpts.
 
 INSTRUCTIONS:
@@ -462,7 +459,7 @@ INSTRUCTIONS:
 • *Procedure:* Actions required by the employee or HR.
 • *Important Note:* Any crucial exceptions, deadlines, or conditions.
 
-3. Write 3 to 4 complete, informative bullet points.
+3. Write 3 to 4 complete, informative bullet points. Complete every sentence cleanly.
 4. If the excerpts truly contain no relevant information for "{query}", respond ONLY with:
 "❌ This information is not covered in our official policy documents."
 

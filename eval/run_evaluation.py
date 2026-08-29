@@ -13,13 +13,12 @@ import os
 import re
 import sys
 
-# Ensure project root is accessible in Python path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 from google import genai
 from google.genai import types
@@ -33,13 +32,16 @@ from app.services.rag_service import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("RAG_EVAL")
 
-# Initialize Gemini Client
 api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-gemini_client = genai.Client(api_key=api_key) if api_key else None
+if not api_key:
+    logger.error("❌ GEMINI_API_KEY is missing from environment / .env file.")
+    gemini_client = None
+else:
+    gemini_client = genai.Client(api_key=api_key)
 
 
 def load_benchmark_dataset(file_path="eval/benchmark_data.json"):
-    """Loads the benchmark test dataset safely."""
+    """Loads the benchmark test dataset safely with UTF-8 BOM handling."""
     if not os.path.isabs(file_path):
         file_path = os.path.join(PROJECT_ROOT, file_path)
 
@@ -47,22 +49,30 @@ def load_benchmark_dataset(file_path="eval/benchmark_data.json"):
         logger.error(f"BENCHMARK_FILE_NOT_FOUND | path={file_path}")
         return []
 
-    with open(file_path, "r", encoding="utf-8") as f:
+    with open(file_path, "r", encoding="utf-8-sig") as f:
         return json.load(f)
+
+
+def clean_name_for_match(name: str) -> str:
+    """Normalizes document names for resilient matching."""
+    s = re.sub(r"^\d+_", "", name.lower())
+    s = s.replace(".pdf", "").replace("_", " ").replace("-", " ")
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def evaluate_retrieval(top_docs, expected_document, expected_section=None):
     """Tier 1: Evaluates Search Retrieval (Hit Rate & MRR)."""
     hit = 0
     mrr = 0.0
+    target_clean = clean_name_for_match(str(expected_document))
 
     for rank, doc in enumerate(top_docs, start=1):
-        source = str(doc.metadata.get("source", doc.metadata.get("file_name", ""))).lower()
+        source_raw = str(doc.metadata.get("source", doc.metadata.get("file_name", "")))
+        source_clean = clean_name_for_match(source_raw)
         content = doc.page_content.lower()
-        target_doc = str(expected_document).lower().replace(".pdf", "")
 
-        # Match filename or document title
-        if target_doc in source or target_doc in content:
+        # Check if clean target is contained in clean source or page content
+        if target_clean in source_clean or target_clean in content:
             if expected_section is None or str(expected_section).lower() in content:
                 hit = 1
                 mrr = 1.0 / rank
@@ -84,14 +94,14 @@ Generated Answer: {generated_answer}
 Ground Truth Reference: {ground_truth}
 
 Evaluation Criteria:
-- faithfulness_score: (0.0 to 1.0) Is the generated answer 100% grounded in the retrieved context without hallucinations?
-- relevancy_score: (0.0 to 1.0) Does the answer directly, accurately, and concisely resolve the question based on ground truth?
+- faithfulness_score: (0.0 to 1.0) Is the answer 100% grounded in the context without extra hallucinations?
+- relevancy_score: (0.0 to 1.0) Does the answer directly and accurately resolve the question based on ground truth?
 
-Output ONLY a single valid JSON object:
+Output ONLY a JSON object:
 {{
-  "faithfulness_score": <float>,
-  "relevancy_score": <float>,
-  "reasoning": "<1 sentence explanation>"
+  "faithfulness_score": <float 0.0 to 1.0>,
+  "relevancy_score": <float 0.0 to 1.0>,
+  "reasoning": "<short explanation>"
 }}"""
 
     try:
@@ -109,7 +119,7 @@ Output ONLY a single valid JSON object:
     except Exception as e:
         logger.error(f"EVAL_LLM_JUDGE_ERROR | {e}")
 
-    return {"faithfulness_score": 0.0, "relevancy_score": 0.0, "reasoning": "Judge execution failed"}
+    return {"faithfulness_score": 0.0, "relevancy_score": 0.0, "reasoning": "Judge evaluation failed"}
 
 
 def run_full_evaluation():
@@ -137,11 +147,11 @@ def run_full_evaluation():
         print(f"------------ Test Case #{q_id} ------------")
         print(f"❓ Question: {q}")
 
-        # 1. Query Expansion & Hybrid Retrieval (Matches Production top_k=8)
+        # 1. Query Expansion & Hybrid Retrieval
         expanded_queries = multi_query_expansion(q, gemini_client)
         dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(expanded_queries, top_k=8)
 
-        # 2. Math RRF Re-ranking (Matches Production top_k=5)
+        # 2. Math RRF Re-ranking
         context, citation_footer, top_docs = math_rrf_rerank(dense_docs, sparse_docs, top_k=5)
 
         # 3. Evaluate Tier 1: Search Retrieval Performance
@@ -150,7 +160,7 @@ def run_full_evaluation():
         total_mrr += mrr
         print(f"🎯 Retrieval -> Hit: {hit} | MRR: {mrr:.2f}")
 
-        # 4. Generate Answer via Gemini (Production Card Format)
+        # 4. Generate Answer via Gemini
         prompt = f"""You are an AI HR Assistant. Answer the employee's question using ONLY the provided Policy Excerpts.
 
 FORMAT RULES:
@@ -158,10 +168,9 @@ FORMAT RULES:
 2. Structure the answer EXACTLY as follows:
 📋 *Policy Information*
 ━━━━━━━━━━━━━━━━━━━
-📌 *Policy Details:*
-• *Category:* Direct factual detail from policy.
-
-3. Complete every sentence cleanly without extra summaries.
+📌 *Key Details:*
+• *Summary:* Direct factual explanation.
+• *Rules:* Applicable limits, conditions, or approvals.
 
 ---
 POLICY EXCERPTS:
@@ -196,7 +205,7 @@ Response:"""
         total_faithfulness += faithfulness
         total_relevancy += relevancy
 
-        print(f"🤖 Answer: {generated_answer.replace(chr(10), ' ')[:100]}...")
+        print(f"🤖 Answer: {generated_answer.replace(chr(10), ' ')[:110]}...")
         print(f"📊 Scores  -> Faithfulness: {faithfulness:.2f} | Relevancy: {relevancy:.2f}")
         print(f"💡 Notes   -> {scores.get('reasoning', '')}\n")
 

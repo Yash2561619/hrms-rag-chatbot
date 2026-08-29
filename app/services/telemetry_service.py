@@ -1,6 +1,7 @@
 """Centralized Observability Service using Langfuse Python SDK.
 
-Supports modern Langfuse v3/v4 OpenTelemetry context model and legacy fallbacks.
+Supports modern Langfuse v3/v4 OpenTelemetry context model, explicit observation lifecycles,
+token cost profiling, automated quality scores, and background flushing.
 Location: app/services/telemetry_service.py
 """
 
@@ -8,6 +9,7 @@ import atexit
 import logging
 import os
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -54,7 +56,7 @@ else:
 
 
 def _async_flush():
-    """Background flush to avoid blocking HTTP/webhook threads."""
+    """Background flush to avoid blocking HTTP and webhook threads."""
     if langfuse_client and hasattr(langfuse_client, "flush"):
         try:
             langfuse_client.flush()
@@ -91,7 +93,7 @@ def trace_rag_interaction(
     model_name: str = "gemini-2.5-flash",
     metadata: Optional[Dict[str, Any]] = None,
 ):
-    """Creates a structured trace hierarchy for Gemini, Groq, or Cache hits."""
+    """Creates a comprehensive trace hierarchy with retrieval spans, generation metrics, and evaluation scores."""
     if not langfuse_enabled or not langfuse_client:
         return
 
@@ -101,18 +103,19 @@ def trace_rag_interaction(
         "cache_hit": str(cache_hit),
         "latency_ms": str(round(latency_ms, 2)),
         "chunks_count": str(len(retrieved_chunks)) if retrieved_chunks else "0",
+        "service_layer": "hrms-rag-chatbot",
     })
 
     source_tag = (
         "cache_hit"
         if cache_hit
-        else ("groq_failover" if any(k in model_name.lower() for k in ["groq", "gpt-oss", "qwen", "compound"]) else "gemini_primary")
+        else ("groq_failover" if any(k in model_name.lower() for k in ["groq", "gpt-oss", "llama", "qwen", "compound"]) else "gemini_primary")
     )
-    tags = ["production", "whatsapp", source_tag]
+    tags = ["production", "whatsapp", "rag", source_tag]
 
     try:
         # -------------------------------------------------------------------
-        # Modern OpenTelemetry/Observation API (Langfuse v3 & v4)
+        # 1. Modern OpenTelemetry / Contextual Observation Model (v3/v4 SDK)
         # -------------------------------------------------------------------
         if hasattr(langfuse_client, "start_as_current_observation"):
             with langfuse_client.start_as_current_observation(
@@ -125,7 +128,7 @@ def trace_rag_interaction(
                     metadata=meta,
                 )
 
-                # Set user & session attributes if helper exists
+                # Propagate session and user identity attributes
                 try:
                     from langfuse import propagate_attributes
                     with propagate_attributes(
@@ -137,7 +140,7 @@ def trace_rag_interaction(
                 except Exception:
                     pass
 
-                # 1. Retrieval Span
+                # Retrieval Sub-Span
                 if not cache_hit and retrieved_chunks:
                     with langfuse_client.start_as_current_observation(
                         as_type="span",
@@ -145,11 +148,11 @@ def trace_rag_interaction(
                         input={"query": query_text},
                     ) as ret_span:
                         ret_span.update(
-                            output={"chunks": retrieved_chunks[:4]},
+                            output={"chunks": retrieved_chunks[:5]},
                             metadata={"retrieved_count": str(len(retrieved_chunks))},
                         )
 
-                # 2. LLM Generation Observation
+                # LLM Generation Observation
                 if not cache_hit and model_name != "none":
                     with langfuse_client.start_as_current_observation(
                         as_type="generation",
@@ -167,7 +170,7 @@ def trace_rag_interaction(
                         )
 
         # -------------------------------------------------------------------
-        # Legacy SDK Fallback (Langfuse v2 API)
+        # 2. Universal Legacy / Direct Trace Model Fallback
         # -------------------------------------------------------------------
         elif hasattr(langfuse_client, "trace"):
             trace = langfuse_client.trace(
@@ -180,14 +183,16 @@ def trace_rag_interaction(
                 tags=tags,
             )
 
+            # Retrieval Span
             if not cache_hit and retrieved_chunks and hasattr(trace, "span"):
                 trace.span(
                     name="hybrid_pgvector_bm25_retrieval",
                     input={"query": query_text},
-                    output={"chunks": retrieved_chunks[:4]},
+                    output={"chunks": retrieved_chunks[:5]},
                     metadata={"retrieved_count": len(retrieved_chunks)},
                 )
 
+            # LLM Generation Event
             if not cache_hit and model_name != "none" and hasattr(trace, "generation"):
                 trace.generation(
                     name="llm_policy_generation",
@@ -201,16 +206,56 @@ def trace_rag_interaction(
                     },
                 )
 
+            # Evaluation Scores
             if hasattr(trace, "score"):
                 trace.score(
-                    name="cache_hit",
+                    name="cache_hit_ratio",
                     value=1.0 if cache_hit else 0.0,
                     comment="Semantic Redis Cache Hit Indicator",
                 )
+                trace.score(
+                    name="latency_seconds",
+                    value=round(latency_ms / 1000.0, 3),
+                    comment="End-to-End Query Duration in Seconds",
+                )
+                if hallucination_score is not None:
+                    trace.score(
+                        name="policy_groundedness",
+                        value=hallucination_score,
+                        comment="Automated Context Faithfulness Verification",
+                    )
 
-        # Flush in non-blocking background thread
+        # Asynchronous non-blocking flush
         threading.Thread(target=_async_flush, daemon=True).start()
-        logger.info(f"✅ TRACE_LOGGED_LANGFUSE | user={user_id} | model={model_name} | latency={latency_ms:.1f}ms")
+        logger.info(
+            f"✅ TRACE_LOGGED_LANGFUSE | user={user_id} | model={model_name} | latency={latency_ms:.1f}ms"
+        )
 
     except Exception as e:
         logger.warning(f"LANGFUSE_TRACE_FAILED | user={user_id} | error={e}")
+
+
+# ---------------------------------------------------------------------------
+# Manual User Feedback Logging
+# ---------------------------------------------------------------------------
+def log_user_feedback(
+    trace_id: str,
+    rating: float,
+    feedback_text: Optional[str] = None,
+):
+    """Logs explicit user feedback (e.g., WhatsApp button rating 1.0 or 0.0) to Langfuse."""
+    if not langfuse_enabled or not langfuse_client:
+        return
+
+    try:
+        if hasattr(langfuse_client, "score"):
+            langfuse_client.score(
+                trace_id=trace_id,
+                name="user_feedback",
+                value=rating,
+                comment=feedback_text or "User button satisfaction rating",
+            )
+            threading.Thread(target=_async_flush, daemon=True).start()
+            logger.info(f"✅ USER_FEEDBACK_LOGGED | trace_id={trace_id} | score={rating}")
+    except Exception as e:
+        logger.debug(f"USER_FEEDBACK_LOG_FAILED | {e}")

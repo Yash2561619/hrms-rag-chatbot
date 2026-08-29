@@ -1,8 +1,9 @@
 """Advanced RAG Service for HR Policy Queries.
 
 Includes Native PostgreSQL pgvector + BM25 Hybrid Search, Math RRF Re-Ranking,
-Semantic Redis Caching, Instant Groq Failover on 429 Quota, Raw Chunk Fallback,
-Strict Similarity Guards, In-Memory Reset on Force Reload, and Langfuse Observability.
+Semantic Redis Caching, Instant Groq Failover on 429/503 Quotas, Raw Chunk Fallback,
+Balanced Similarity Guards, In-Memory Reset on Force Reload, and Langfuse Observability.
+
 Location: app/services/rag_service.py
 """
 
@@ -45,14 +46,12 @@ embeddings_model = FastEmbedEmbeddings(
 bm25_index = None
 all_docs = []
 
-DENSE_SIMILARITY_THRESHOLD = 0.40  # Cosine similarity filter cutoff
+# Lowered threshold to ensure natural-language queries match policy sections
+DENSE_SIMILARITY_THRESHOLD = 0.22
 
 
 def load_indexes(force_reload: bool = False):
-    """Loads documents from PostgreSQL pgvector into RAM for BM25 sparse matching.
-    
-    Completely resets in-memory structures to guarantee exact sync with PostgreSQL.
-    """
+    """Loads documents from PostgreSQL pgvector into RAM for BM25 sparse matching."""
     global bm25_index, all_docs
 
     if (bm25_index is None or force_reload) and DATABASE_URL:
@@ -62,7 +61,7 @@ def load_indexes(force_reload: bool = False):
             cur.execute("SELECT content, metadata FROM policy_vectors;")
             rows = cur.fetchall()
 
-            # COMPLETELY reset all_docs in memory before assigning new rows
+            # Completely reset in-memory document list
             fresh_docs = [
                 Document(page_content=r[0], metadata=r[1] if r[1] else {})
                 for r in rows
@@ -89,7 +88,7 @@ def load_indexes(force_reload: bool = False):
             logger.error(f"PGVECTOR_LOAD_ERROR | {e}")
 
 
-def pgvector_dense_search(query_vec: List[float], top_k: int = 6) -> List[Document]:
+def pgvector_dense_search(query_vec: List[float], top_k: int = 8) -> List[Document]:
     """Performs native HNSW cosine distance search (<=>) directly in PostgreSQL."""
     if not DATABASE_URL:
         return []
@@ -132,7 +131,7 @@ Output format: Return ONLY the queries separated by newlines, no bullet points o
             model="gemini-2.5-flash",
             contents=prompt,
             config=types.GenerateContentConfig(
-                temperature=0.5,
+                temperature=0.4,
                 max_output_tokens=60,
                 top_p=0.9,
             ),
@@ -149,7 +148,7 @@ Output format: Return ONLY the queries separated by newlines, no bullet points o
 
 
 def hybrid_retrieve(
-    queries: list[str], top_k: int = 6
+    queries: list[str], top_k: int = 8
 ) -> tuple[list, list, list]:
     """Executes pgvector (Dense) + BM25 (Sparse) search with relevance filters."""
     load_indexes()
@@ -167,7 +166,7 @@ def hybrid_retrieve(
             tokenized_q = q.lower().split()
             bm25_scores = bm25_index.get_scores(tokenized_q)
             positive_indices = [
-                i for i, score in enumerate(bm25_scores) if score > 0.5
+                i for i, score in enumerate(bm25_scores) if score > 0.0
             ]
             top_indices = sorted(
                 positive_indices,
@@ -182,7 +181,7 @@ def hybrid_retrieve(
 
 
 def math_rrf_rerank(
-    dense_chunks: list, bm25_chunks: list, top_k: int = 4
+    dense_chunks: list, bm25_chunks: list, top_k: int = 5
 ) -> tuple[str, str, list]:
     """Reranks candidate chunks using Reciprocal Rank Fusion."""
     if not dense_chunks and not bm25_chunks:
@@ -242,7 +241,7 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
     seen = set()
     sources_set = set()
 
-    for doc in chunks[:4]:
+    for doc in chunks[:5]:
         source_file = doc.metadata.get("source", "")
         page_num = doc.metadata.get("page", "")
         if source_file and "INDEX" not in source_file.upper():
@@ -259,9 +258,9 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
             if len(sentence) > 25 and sentence.lower() not in seen:
                 seen.add(sentence.lower())
                 clean_sentences.append(sentence)
-                if len(clean_sentences) >= 5:
+                if len(clean_sentences) >= 6:
                     break
-        if len(clean_sentences) >= 5:
+        if len(clean_sentences) >= 6:
             break
 
     bullet_points = (
@@ -321,7 +320,7 @@ def get_active_groq_model() -> Optional[str]:
 
 def is_valid_hr_response(text: str) -> bool:
     """Validates that the generated response contains meaningful text."""
-    if not text or len(text.strip()) < 30:
+    if not text or len(text.strip()) < 20:
         return False
     return True
 
@@ -329,7 +328,7 @@ def is_valid_hr_response(text: str) -> bool:
 def execute_llm_with_backoff_failover(
     gemini_client, prompt: str
 ) -> Tuple[Optional[str], dict, str]:
-    """Cascading Execution: Gemini 2.5 Flash -> Dynamic Groq with Instant 429 Failover."""
+    """Cascading Execution: Gemini 2.5 Flash -> Dynamic Groq with Instant 429/503 Failover."""
 
     # ---------------------------------------------------------
     # Tier 1: Gemini 2.5 Flash
@@ -342,7 +341,7 @@ def execute_llm_with_backoff_failover(
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         temperature=0.2,
-                        max_output_tokens=700,
+                        max_output_tokens=900,
                         top_p=0.85,
                     ),
                 )
@@ -357,9 +356,14 @@ def execute_llm_with_backoff_failover(
                         return cleaned_text, tokens_used, "gemini-2.5-flash"
             except Exception as err:
                 err_str = str(err)
-                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    logger.warning("GEMINI_QUOTA_EXHAUSTED | Immediate failover to Groq ⚡")
-                    break  # Failover immediately without sleep
+                if (
+                    "429" in err_str
+                    or "503" in err_str
+                    or "RESOURCE_EXHAUSTED" in err_str
+                    or "UNAVAILABLE" in err_str
+                ):
+                    logger.warning("GEMINI_UNAVAILABLE_OR_QUOTA_EXHAUSTED | Immediate failover to Groq ⚡")
+                    break  # Failover immediately without sleeping
 
                 sleep_duration = (0.5 * (2**attempt)) + random.uniform(0.1, 0.4)
                 logger.warning(f"GEMINI_RETRY | attempt={attempt+1} | error={err}")
@@ -377,7 +381,7 @@ def execute_llm_with_backoff_failover(
                     model=selected_model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.2,
-                    max_tokens=700,
+                    max_tokens=900,
                 )
                 raw_content = chat_completion.choices[0].message.content or ""
                 cleaned_content = clean_reasoning_and_artifacts(raw_content)
@@ -420,10 +424,10 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
         # 2. Hybrid Retrieval with Score Filter
         chat_history_str = get_chat_history(employee_id, max_messages=4)
         expanded_queries = multi_query_expansion(query, gemini_client)
-        dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(expanded_queries, top_k=6)
+        dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(expanded_queries, top_k=8)
 
-        # Early Guard: If policy is not found or deleted (no vectors passed similarity threshold)
-        if not all_retrieved or not dense_docs:
+        # Early Guard: If no vector or keyword chunks were retrieved at all
+        if not all_retrieved:
             latency_ms = (time.time() - start_time) * 1000
             not_found_msg = "❌ This information is not covered in our official policy documents."
             send_text(sender, not_found_msg)
@@ -440,22 +444,26 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
             )
             return
 
-        context, citation_footer, top_docs = math_rrf_rerank(dense_docs, sparse_docs, top_k=3)
+        # Rerank and pick top 5 most relevant excerpts
+        context, citation_footer, top_docs = math_rrf_rerank(dense_docs, sparse_docs, top_k=5)
 
         if not context.strip():
             not_found_msg = "❌ This information is not covered in our official policy documents."
             send_text(sender, not_found_msg)
             return
 
-        prompt = f"""You are an AI HR Assistant. You must ONLY answer using the provided Policy Excerpts below.
-You are STRICTLY FORBIDDEN from using outside general knowledge or assumptions.
+        # Balanced system prompt that provides detailed answers while avoiding false refusals
+        prompt = f"""You are an expert HR Policy Assistant. Answer the employee question accurately using the Policy Excerpts below.
 
-If the excerpts do NOT contain the exact answer for "{query}", your ENTIRE response must be ONLY:
+RULES:
+1. Explain the relevant policies, conditions, eligibility, and rules clearly from the excerpts.
+2. If the excerpts truly contain NO relevant information for "{query}", respond ONLY with:
 "❌ This information is not covered in our official policy documents."
-
-STRICT FORMATTING:
-1. Start directly with "📋 *Policy Information*" followed by "━━━━━━━━━━━━━━━━━━━".
-2. Output a MAXIMUM of 4 bullet points formatted as: • *Category:* Exact detail from excerpt.
+3. Format the response clearly:
+   📋 *Policy Details*
+   ━━━━━━━━━━━━━━━━━━━
+   • *Topic/Rule:* Clear explanation with numbers, limits, conditions, or steps.
+   • *Procedure / Note:* Any required approvals, consequences, or guidelines.
 
 ---
 POLICY EXCERPTS:
@@ -465,7 +473,7 @@ POLICY EXCERPTS:
 EMPLOYEE QUESTION:
 {query}
 
-Card Response:"""
+Response:"""
 
         # 3. Cascading LLM Execution
         response_text, tokens_used, model_used = execute_llm_with_backoff_failover(gemini_client, prompt)

@@ -1,32 +1,52 @@
+"""Automated RAG Evaluation Matrix for HR Assistant.
+
+Evaluates:
+  Tier 1: Search Retrieval (Hit Rate @ 5, Mean Reciprocal Rank - MRR)
+  Tier 2: LLM Generation (Faithfulness, Answer Relevancy, Groundedness)
+
+Location: eval/run_evaluation.py
+"""
+
 import json
 import logging
 import os
+import re
 import sys
 
 # Ensure project root is accessible in Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from google import genai
+from google.genai import types
+
 from app.services.rag_service import (
     hybrid_retrieve,
     math_rrf_rerank,
     multi_query_expansion,
 )
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("RAG_EVAL")
 
 # Initialize Gemini Client
 api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-gemini_client = genai.Client(api_key=api_key)
+gemini_client = genai.Client(api_key=api_key) if api_key else None
 
 
 def load_benchmark_dataset(file_path="eval/benchmark_data.json"):
-    """Loads the benchmark test dataset."""
+    """Loads the benchmark test dataset safely."""
+    if not os.path.isabs(file_path):
+        file_path = os.path.join(PROJECT_ROOT, file_path)
+
     if not os.path.exists(file_path):
-        # Fallback to local root if called directly from scripts folder
-        file_path = os.path.join(os.path.dirname(__file__), "..", "eval", "benchmark_data.json")
-    
+        logger.error(f"BENCHMARK_FILE_NOT_FOUND | path={file_path}")
+        return []
+
     with open(file_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -37,13 +57,13 @@ def evaluate_retrieval(top_docs, expected_document, expected_section=None):
     mrr = 0.0
 
     for rank, doc in enumerate(top_docs, start=1):
-        source = doc.metadata.get("source", doc.metadata.get("file_name", ""))
+        source = str(doc.metadata.get("source", doc.metadata.get("file_name", ""))).lower()
         content = doc.page_content.lower()
+        target_doc = str(expected_document).lower().replace(".pdf", "")
 
-        # Check if the document source matches
-        if expected_document.lower() in source.lower() or expected_document.lower() in content:
-            # Check section match in page content if section specified
-            if expected_section is None or expected_section.lower() in content:
+        # Match filename or document title
+        if target_doc in source or target_doc in content:
+            if expected_section is None or str(expected_section).lower() in content:
                 hit = 1
                 mrr = 1.0 / rank
                 break
@@ -53,39 +73,53 @@ def evaluate_retrieval(top_docs, expected_document, expected_section=None):
 
 def evaluate_generation_with_llm_judge(question, retrieved_context, generated_answer, ground_truth):
     """Tier 2: Evaluates LLM Generation Quality (Faithfulness & Answer Relevancy)."""
-    judge_prompt = f"""
-You are an impartial AI evaluator scoring a RAG system's response on a scale from 0.0 to 1.0.
+    if not gemini_client:
+        return {"faithfulness_score": 0.0, "relevancy_score": 0.0, "reasoning": "Gemini client not initialized"}
+
+    judge_prompt = f"""You are an impartial AI evaluator scoring an HR RAG system response on a scale from 0.0 to 1.0.
 
 Question: {question}
 Retrieved Context: {retrieved_context}
 Generated Answer: {generated_answer}
 Ground Truth Reference: {ground_truth}
 
-Return ONLY a JSON object matching this schema:
+Evaluation Criteria:
+- faithfulness_score: (0.0 to 1.0) Is the generated answer 100% grounded in the retrieved context without hallucinations?
+- relevancy_score: (0.0 to 1.0) Does the answer directly, accurately, and concisely resolve the question based on ground truth?
+
+Output ONLY a single valid JSON object:
 {{
-  "faithfulness_score": <float 0.0 to 1.0: Is the answer 100% grounded in the context without extra hallucinations?>,
-  "relevancy_score": <float 0.0 to 1.0: Does the answer directly and accurately address the question?>,
-  "reasoning": "<short sentence explaining scores>"
-}}
-"""
+  "faithfulness_score": <float>,
+  "relevancy_score": <float>,
+  "reasoning": "<1 sentence explanation>"
+}}"""
+
     try:
         res = gemini_client.models.generate_content(
             model="gemini-2.5-flash",
             contents=judge_prompt,
-            config={
-                "temperature": 0.0,
-                "response_mime_type": "application/json",
-            },
+            config=types.GenerateContentConfig(
+                temperature=0.0,
+                response_mime_type="application/json",
+            ),
         )
-        return json.loads(res.text)
+        if res and res.text:
+            cleaned_text = re.sub(r"```(?:json)?|```", "", res.text).strip()
+            return json.loads(cleaned_text)
     except Exception as e:
         logger.error(f"EVAL_LLM_JUDGE_ERROR | {e}")
-        return {"faithfulness_score": 0.0, "relevancy_score": 0.0, "reasoning": str(e)}
+
+    return {"faithfulness_score": 0.0, "relevancy_score": 0.0, "reasoning": "Judge execution failed"}
 
 
 def run_full_evaluation():
     dataset = load_benchmark_dataset()
     num_items = len(dataset)
+
+    if num_items == 0:
+        print("❌ No test cases found in eval/benchmark_data.json.")
+        return
+
     print(f"\n🚀 STARTING RAG EVALUATION MATRIX ({num_items} Test Cases)...\n")
 
     total_hits = 0
@@ -96,19 +130,19 @@ def run_full_evaluation():
     for item in dataset:
         q_id = item.get("id", 1)
         q = item["question"]
-        ground_truth = item["ground_truth"]
+        ground_truth = item.get("ground_truth", "")
         expected_doc = item.get("source_document", "")
         expected_sec = item.get("expected_section")
 
         print(f"------------ Test Case #{q_id} ------------")
         print(f"❓ Question: {q}")
 
-        # 1. Step 1: Query Expansion & Retrieval
+        # 1. Query Expansion & Hybrid Retrieval (Matches Production top_k=8)
         expanded_queries = multi_query_expansion(q, gemini_client)
-        dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(expanded_queries, top_k=6)
+        dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(expanded_queries, top_k=8)
 
-        # 2. Step 2: Math RRF Re-ranking
-        context, citation_footer, top_docs = math_rrf_rerank(dense_docs, sparse_docs, top_k=2)
+        # 2. Math RRF Re-ranking (Matches Production top_k=5)
+        context, citation_footer, top_docs = math_rrf_rerank(dense_docs, sparse_docs, top_k=5)
 
         # 3. Evaluate Tier 1: Search Retrieval Performance
         hit, mrr = evaluate_retrieval(top_docs, expected_doc, expected_sec)
@@ -116,39 +150,62 @@ def run_full_evaluation():
         total_mrr += mrr
         print(f"🎯 Retrieval -> Hit: {hit} | MRR: {mrr:.2f}")
 
-        # 4. Generate Answer via Gemini
-        prompt = f"""You are an HR Assistant. Answer the question concisely using ONLY the provided context. If not found in context, state 'Information not available in policy'.
+        # 4. Generate Answer via Gemini (Production Card Format)
+        prompt = f"""You are an AI HR Assistant. Answer the employee's question using ONLY the provided Policy Excerpts.
 
-Context:
+FORMAT RULES:
+1. Provide a clean, concise card response.
+2. Structure the answer EXACTLY as follows:
+📋 *Policy Information*
+━━━━━━━━━━━━━━━━━━━
+📌 *Policy Details:*
+• *Category:* Direct factual detail from policy.
+
+3. Complete every sentence cleanly without extra summaries.
+
+---
+POLICY EXCERPTS:
 {context}
 
-Question:
-{q}"""
+---
+EMPLOYEE QUESTION:
+{q}
+
+Response:"""
+
         try:
             resp = gemini_client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=prompt,
-                config={"temperature": 0.1, "max_output_tokens": 200},
+                config=types.GenerateContentConfig(
+                    temperature=0.2,
+                    max_output_tokens=500,
+                    top_p=0.85,
+                ),
             )
-            generated_answer = resp.text.strip() if resp and resp.text else ""
+            generated_answer = resp.text.strip() if resp and resp.text else "Information not available in policy"
         except Exception as e:
-            generated_answer = ""
+            logger.error(f"GEN_ERROR | {e}")
+            generated_answer = "Information not available in policy"
 
-        # 5. Evaluate Tier 2: LLM Quality Scores
+        # 5. Evaluate Tier 2: LLM Quality Scores via Judge
         scores = evaluate_generation_with_llm_judge(q, context, generated_answer, ground_truth)
-        total_faithfulness += scores.get("faithfulness_score", 0.0)
-        total_relevancy += scores.get("relevancy_score", 0.0)
+        faithfulness = float(scores.get("faithfulness_score", 0.0))
+        relevancy = float(scores.get("relevancy_score", 0.0))
 
-        print(f"🤖 Answer: {generated_answer}")
-        print(f"📊 Scores  -> Faithfulness: {scores.get('faithfulness_score', 0.0)} | Relevancy: {scores.get('relevancy_score', 0.0)}")
+        total_faithfulness += faithfulness
+        total_relevancy += relevancy
+
+        print(f"🤖 Answer: {generated_answer.replace(chr(10), ' ')[:100]}...")
+        print(f"📊 Scores  -> Faithfulness: {faithfulness:.2f} | Relevancy: {relevancy:.2f}")
         print(f"💡 Notes   -> {scores.get('reasoning', '')}\n")
 
-    # Print Final Evaluation Table
+    # Final Summary Matrix
     print("==================================================")
     print("         📈 RAG EVALUATION MATRIX RESULTS         ")
     print("==================================================")
     print(f"  • Total Test Cases:         {num_items}")
-    print(f"  • Hit Rate @ 2:             {total_hits / num_items:.2%}")
+    print(f"  • Hit Rate @ 5:             {total_hits / num_items:.2%}")
     print(f"  • Mean Reciprocal Rank:     {total_mrr / num_items:.2f}")
     print(f"  • Average Faithfulness:     {total_faithfulness / num_items:.2f} / 1.0")
     print(f"  • Average Answer Relevancy: {total_relevancy / num_items:.2f} / 1.0")

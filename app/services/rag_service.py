@@ -447,22 +447,23 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
             return
 
         # Exact Card Response Structure
+        # In app/services/rag_service.py -> inside handle_rag_query()
+
         prompt = f"""You are an AI HR Assistant. Answer the employee's question using ONLY the provided Policy Excerpts.
 
-FORMAT RULES:
-1. Provide a clean, concise card response.
-2. Structure the answer EXACTLY as follows:
+INSTRUCTIONS:
+1. Provide a concise, clear response.
+2. Format your response exactly like this:
 📋 *Policy Information*
 ━━━━━━━━━━━━━━━━━━━
-📌 *<Brief Title Based on Question>:*
-• *<Category 1>:* <1 direct sentence summary from policy>
-• *<Category 2>:* <1 direct sentence summary from policy>
-• *<Category 3>:* <1 direct sentence summary from policy>
-• *<Category 4>:* <1 direct sentence summary from policy>
+📌 *Key Details:*
+• *Summary:* Brief explanation of what the policy covers.
+• *Rules & Criteria:* Specific conditions, days, eligibility, or rules.
+• *Procedure:* Actions required by the employee or HR.
+• *Important Note:* Any crucial exceptions, deadlines, or conditions.
 
-3. Use a MAXIMUM of 3 to 4 bullet points. Complete every sentence cleanly.
-4. Do NOT include sub-bullets, extra paragraphs, or concluding summaries.
-5. If the excerpts truly contain no relevant information for "{query}", respond ONLY with:
+3. Write 3 to 4 complete, informative bullet points.
+4. If the excerpts truly contain no relevant information for "{query}", respond ONLY with:
 "❌ This information is not covered in our official policy documents."
 
 ---

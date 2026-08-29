@@ -365,6 +365,7 @@ flowchart TD
     subgraph AI_Telemetry
         Gemini[Gemini 2.5 Flash]
         Groq[Groq Llama 3.3 70B]
+        RawChunks[Raw Retrieved Policy Chunks]
         Langfuse[Langfuse]
     end
 
@@ -387,7 +388,12 @@ flowchart TD
     RAGSvc <--> PG
 
     RAGSvc --> Gemini
-    Gemini -. Failover 429/503 .-> Groq
+
+    Gemini -. "Failover 429/503" .-> Groq
+
+    Groq -. "LLM Unavailable" .-> RawChunks
+
+    RAGSvc -. "Retrieved Context" .-> RawChunks
 
     RAGSvc --> Langfuse
 
@@ -397,6 +403,10 @@ flowchart TD
 
     Worker --> S3
     Worker --> PG
+
+    Gemini --> WA
+    Groq --> WA
+    RawChunks --> WA
 ```
 
 ---

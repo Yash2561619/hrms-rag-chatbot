@@ -46,7 +46,6 @@ embeddings_model = FastEmbedEmbeddings(
 bm25_index = None
 all_docs = []
 
-# Lowered threshold to ensure natural-language queries match policy sections
 DENSE_SIMILARITY_THRESHOLD = 0.22
 
 
@@ -61,7 +60,6 @@ def load_indexes(force_reload: bool = False):
             cur.execute("SELECT content, metadata FROM policy_vectors;")
             rows = cur.fetchall()
 
-            # Completely reset in-memory document list
             fresh_docs = [
                 Document(page_content=r[0], metadata=r[1] if r[1] else {})
                 for r in rows
@@ -156,12 +154,10 @@ def hybrid_retrieve(
     sparse_docs = []
 
     for q in queries:
-        # 1. Native Postgres pgvector dense retrieval
         q_vec = list(embeddings_model.embed_query(q))
         d_docs = pgvector_dense_search(q_vec, top_k=top_k)
         dense_docs.extend(d_docs)
 
-        # 2. In-memory BM25 sparse retrieval
         if bm25_index and all_docs:
             tokenized_q = q.lower().split()
             bm25_scores = bm25_index.get_scores(tokenized_q)
@@ -241,7 +237,7 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
     seen = set()
     sources_set = set()
 
-    for doc in chunks[:5]:
+    for doc in chunks[:4]:
         source_file = doc.metadata.get("source", "")
         page_num = doc.metadata.get("page", "")
         if source_file and "INDEX" not in source_file.upper():
@@ -258,13 +254,13 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
             if len(sentence) > 25 and sentence.lower() not in seen:
                 seen.add(sentence.lower())
                 clean_sentences.append(sentence)
-                if len(clean_sentences) >= 6:
+                if len(clean_sentences) >= 4:
                     break
-        if len(clean_sentences) >= 6:
+        if len(clean_sentences) >= 4:
             break
 
     bullet_points = (
-        "\n".join([f"• {s}." for s in clean_sentences])
+        "\n".join([f"• *Detail:* {s}." for s in clean_sentences])
         if clean_sentences
         else "• Details are available in the official policy document."
     )
@@ -275,9 +271,9 @@ def format_raw_chunks_fallback(chunks: list) -> tuple[str, str]:
     )
 
     fallback_text = (
-        "📋 *Policy Excerpts (High Traffic Mode)*\n━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{bullet_points}\n\n"
-        "_Please ask again in a moment for a synthesized summary._"
+        "📋 *Policy Information*\n━━━━━━━━━━━━━━━━━━━\n"
+        "📌 *Policy Details:*\n"
+        f"{bullet_points}"
     )
 
     return fallback_text, citation_footer
@@ -331,7 +327,7 @@ def execute_llm_with_backoff_failover(
     """Cascading Execution: Gemini 2.5 Flash -> Dynamic Groq with Instant 429/503 Failover."""
 
     # ---------------------------------------------------------
-    # Tier 1: Gemini 2.5 Flash
+    # Tier 1: Gemini 2.5 Flash (500 tokens ceiling)
     # ---------------------------------------------------------
     if gemini_client:
         for attempt in range(2):
@@ -341,7 +337,7 @@ def execute_llm_with_backoff_failover(
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         temperature=0.2,
-                        max_output_tokens=900,
+                        max_output_tokens=500,
                         top_p=0.85,
                     ),
                 )
@@ -363,14 +359,14 @@ def execute_llm_with_backoff_failover(
                     or "UNAVAILABLE" in err_str
                 ):
                     logger.warning("GEMINI_UNAVAILABLE_OR_QUOTA_EXHAUSTED | Immediate failover to Groq ⚡")
-                    break  # Failover immediately without sleeping
+                    break
 
                 sleep_duration = (0.5 * (2**attempt)) + random.uniform(0.1, 0.4)
                 logger.warning(f"GEMINI_RETRY | attempt={attempt+1} | error={err}")
                 time.sleep(sleep_duration)
 
     # ---------------------------------------------------------
-    # Tier 2: Groq Failover
+    # Tier 2: Groq Failover (500 tokens ceiling)
     # ---------------------------------------------------------
     if groq_client:
         selected_model = get_active_groq_model()
@@ -381,7 +377,7 @@ def execute_llm_with_backoff_failover(
                     model=selected_model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.2,
-                    max_tokens=900,
+                    max_tokens=500,
                 )
                 raw_content = chat_completion.choices[0].message.content or ""
                 cleaned_content = clean_reasoning_and_artifacts(raw_content)
@@ -422,11 +418,10 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
             return
 
         # 2. Hybrid Retrieval with Score Filter
-        chat_history_str = get_chat_history(employee_id, max_messages=4)
         expanded_queries = multi_query_expansion(query, gemini_client)
         dense_docs, sparse_docs, all_retrieved = hybrid_retrieve(expanded_queries, top_k=8)
 
-        # Early Guard: If no vector or keyword chunks were retrieved at all
+        # Early Guard
         if not all_retrieved:
             latency_ms = (time.time() - start_time) * 1000
             not_found_msg = "❌ This information is not covered in our official policy documents."
@@ -444,7 +439,6 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
             )
             return
 
-        # Rerank and pick top 5 most relevant excerpts
         context, citation_footer, top_docs = math_rrf_rerank(dense_docs, sparse_docs, top_k=5)
 
         if not context.strip():
@@ -452,18 +446,24 @@ def handle_rag_query(employee, query: str, collection_unused, gemini_client):
             send_text(sender, not_found_msg)
             return
 
-        # Balanced system prompt that provides detailed answers while avoiding false refusals
-        prompt = f"""You are an expert HR Policy Assistant. Answer the employee question accurately using the Policy Excerpts below.
+        # Exact Card Response Structure
+        prompt = f"""You are an AI HR Assistant. Answer the employee's question using ONLY the provided Policy Excerpts.
 
-RULES:
-1. Explain the relevant policies, conditions, eligibility, and rules clearly from the excerpts.
-2. If the excerpts truly contain NO relevant information for "{query}", respond ONLY with:
+FORMAT RULES:
+1. Provide a clean, concise card response.
+2. Structure the answer EXACTLY as follows:
+📋 *Policy Information*
+━━━━━━━━━━━━━━━━━━━
+📌 *<Brief Title Based on Question>:*
+• *<Category 1>:* <1 direct sentence summary from policy>
+• *<Category 2>:* <1 direct sentence summary from policy>
+• *<Category 3>:* <1 direct sentence summary from policy>
+• *<Category 4>:* <1 direct sentence summary from policy>
+
+3. Use a MAXIMUM of 3 to 4 bullet points. Complete every sentence cleanly.
+4. Do NOT include sub-bullets, extra paragraphs, or concluding summaries.
+5. If the excerpts truly contain no relevant information for "{query}", respond ONLY with:
 "❌ This information is not covered in our official policy documents."
-3. Format the response clearly:
-   📋 *Policy Details*
-   ━━━━━━━━━━━━━━━━━━━
-   • *Topic/Rule:* Clear explanation with numbers, limits, conditions, or steps.
-   • *Procedure / Note:* Any required approvals, consequences, or guidelines.
 
 ---
 POLICY EXCERPTS:
@@ -483,7 +483,6 @@ Response:"""
             final_whatsapp_msg = "❌ This information is not covered in our official policy documents."
             send_text(sender, final_whatsapp_msg)
         elif model_used == "none":
-            # Both LLMs failed -> Serve raw chunks fallback
             logger.warning(f"LLM_OUTAGE_TRIGGERED_RAW_FALLBACK | user={employee_id}")
             raw_fallback_text, raw_footer = format_raw_chunks_fallback(top_docs)
             final_whatsapp_msg = f"{raw_fallback_text}{raw_footer}"

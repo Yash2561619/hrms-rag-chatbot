@@ -1,108 +1,379 @@
-# 🏢 Enterprise AI HR Assistant (WhatsApp Hybrid RAG Chatbot)
+# 🏢 Enterprise AI HR Assistant
 
-An enterprise-grade, multi-turn AI HR Assistant deployed over WhatsApp with an integrated Flask Admin Portal.
+### WhatsApp Hybrid RAG Chatbot with Flask Admin Portal
 
----
-
-## 📖 Project Overview
-
-Managing employee queries regarding leave policies, payslip access, balance inquiries, and training materials often places a significant burden on HR departments. This project provides an automated, self-service HR Assistant accessible directly via WhatsApp and backed by a centralized web-based management portal.
-
-* **What it does:** Automates HR policy query handling, leave balance tracking, multi-turn leave application workflows, password-protected payslip retrieval, and training video delivery.
-* **Problems it solves:** Eliminates repetitive HR support tickets, prevents leave policy ambiguity, secures sensitive employee payroll documents, and provides high-availability assistance.
-* **Target Users:** Enterprise employees (via WhatsApp) and HR Administrators/Managers (via the Web Admin Portal).
+An enterprise-grade, multi-turn AI-powered HR Assistant available through **WhatsApp**, with a centralized **Flask-based Admin Portal** for employee management, leave approvals, payroll, policies, training materials, and system monitoring.
 
 ---
 
-## ✨ Key Features
+## 📖 Overview
 
-* **WhatsApp Conversational Interface:**
-  * **Interactive Greeting & Action Menu:** Dynamic interactive list pickers and button menus for quick navigation.
-  * **Multi-Turn Leave Application Workflow:** Slot-filling mechanism to capture start date, end date, and reason with explicit interactive confirmation buttons.
-  * **Deterministic Leave Classification:** Rule-based detection for Casual, Sick, and Critical leave requests, backed by policy validation.
-  * **Leave Balance & History Inquiries:** Real-time database queries to fetch remaining quotas and historical application statuses.
-  * **Password-Protected Payslip Delivery:** Automatic PDF encryption with credentials (`<EMPLOYEE_ID>@<LAST_4_DIGITS_PHONE>`) delivered via AWS S3 presigned URLs or direct documents.
-  * **Training Video Dispatch:** Category-based retrieval and delivery for Safety, Health Insurance, and Induction modules.
+Managing employee questions about HR policies, leave balances, payslips, and training resources can create repetitive workloads for HR teams.
 
-* **Hybrid RAG Policy Search:**
-  * **Dense Retrieval:** Native PostgreSQL `pgvector` HNSW index with cosine distance (`sentence-transformers/all-MiniLM-L6-v2` via FastEmbed).
-  * **Sparse Retrieval:** In-memory BM25Okapi keyword search over synchronized policy chunks.
-  * **Multi-Query Expansion:** Generates alternative policy queries to boost semantic recall.
-  * **Reciprocal Rank Fusion (Math RRF):** Combines and scores dense and sparse candidates.
-  * **Semantic Caching:** Caches high-similarity queries ($\ge 0.92$) in Upstash Redis to minimize latency and token consumption.
-  * **Cascading LLM Engine:** Primary generation via Google Gemini 2.5 Flash with automatic failover to Groq (`llama-3.3-70b-versatile`) on rate limits (`429`/`503`) and raw chunk fallback formatting.
+The **Enterprise AI HR Assistant** provides a self-service HR platform where employees can interact with an AI assistant directly through WhatsApp, while HR administrators manage employees, leave requests, payroll documents, policies, and training content through a web-based dashboard.
 
-* **Flask Admin Portal:**
-  * **Dashboard Analytics:** Live headcount, pending leave counters, upload statistics, and audit activity logs.
-  * **Employee Management:** Directory listing, live leave status, search filters, additions, updates, and removals.
-  * **Leave Request Approval Flow:** Manager approval/rejection actions triggering direct WhatsApp status alerts to employees.
-  * **Payroll Uploads & Bulk Processing:** Single payslip uploads and background ZIP processing with Redis Queue (RQ) and daemon thread fallbacks.
-  * **Policy Vector Management:** Upload PDFs to S3 with automated asynchronous text extraction, chunking, pgvector embedding, and cache clearing.
-  * **Training Video Management:** Video cataloging and metadata persistence linked to S3 objects.
+### What It Does
 
-* **Observability & Telemetry:**
-  * **Langfuse Tracing:** Distributed OpenTelemetry-compliant spans capturing retrieval latency, token usage, cache hits, generation logs, and feedback scores.
+* Answers HR policy-related questions using a **Hybrid RAG pipeline**
+* Provides real-time employee leave balances and history
+* Supports multi-turn leave application workflows
+* Classifies leave requests using deterministic rules
+* Delivers password-protected payslips
+* Provides training videos through WhatsApp
+* Allows HR managers to approve/reject leave requests
+* Provides centralized employee and payroll management
+* Tracks AI requests using **Langfuse observability**
+* Uses semantic caching to reduce response latency and LLM costs
+
+### Target Users
+
+* 👨‍💼 Employees — interact through WhatsApp
+* 👩‍💼 HR Administrators — manage the system through the web portal
+* 👔 HR Managers — review and approve employee leave requests
 
 ---
 
-## 🔄 How the Project Works
+# ✨ Key Features
 
-1. **Inbound Webhook:** A user sends a WhatsApp message or interacts with a menu/button, which hits the `/webhook` endpoint.
-2. **Authentication & Rate Limiting:** The webhook verifies rate limits and looks up the employee's registered WhatsApp phone number in PostgreSQL.
-3. **Intent Routing & Session Handling:**
-   * If an active leave application session exists, the conversation controller continues slot filling.
-   * If the intent is payroll, balance, or video-related, dedicated database/S3 services process the request.
-   * If the user asks a policy question, the query enters the Hybrid RAG Pipeline.
-4. **Hybrid RAG Execution:**
-   * The semantic cache is queried in Upstash Redis.
-   * On a cache miss, query expansion generates variations evaluated against `pgvector` and `BM25Okapi`.
-   * Candidates are re-ranked using Math RRF.
-   * The context is synthesized using Gemini 2.5 Flash (or Groq failover).
-5. **Response Delivery:** The structured answer and source citations are formatted and dispatched back to the user via the WhatsApp Cloud API.
-6. **Telemetry:** Execution metrics, latency, and token consumption are asynchronously logged to Langfuse.
+## 💬 WhatsApp AI Assistant
+
+### Interactive Menu
+
+Employees can navigate the assistant using WhatsApp interactive lists and buttons.
+
+### Multi-Turn Leave Application
+
+The assistant collects leave information step-by-step:
+
+```text
+Employee
+   ↓
+Leave Type
+   ↓
+Start Date
+   ↓
+End Date
+   ↓
+Reason
+   ↓
+Confirmation
+   ↓
+Leave Request Created
+```
+
+### Leave Classification
+
+Leave requests are classified into categories such as:
+
+* Casual Leave
+* Sick Leave
+* Critical Leave
+
+Policy rules are validated before submitting the request.
+
+### Leave Balance & History
+
+Employees can check:
+
+* Remaining leave balance
+* Previous leave applications
+* Application status
+* Leave history
+
+### 🔐 Secure Payslip Delivery
+
+Payslips are encrypted before storage and delivery.
+
+Password format:
+
+```text
+<EMPLOYEE_ID>@<LAST_4_DIGITS_OF_PHONE>
+```
+
+Payslips are stored in AWS S3 and can be delivered using secure presigned URLs.
+
+### 🎓 Training Videos
+
+Employees can request training content by category, including:
+
+* Safety
+* Health Insurance
+* Induction
 
 ---
 
-## 🏗️ System Architecture
+# 🧠 Hybrid RAG Pipeline
+
+The system uses a **Hybrid Retrieval-Augmented Generation (RAG)** architecture combining semantic and keyword search.
+
+### Dense Retrieval
+
+Uses:
+
+* PostgreSQL
+* `pgvector`
+* HNSW indexing
+* FastEmbed
+* `sentence-transformers/all-MiniLM-L6-v2`
+* Cosine similarity
+
+### Sparse Retrieval
+
+Uses:
+
+* BM25Okapi
+* `rank-bm25`
+* In-memory keyword search
+
+### Multi-Query Expansion
+
+The system generates alternative versions of the employee's question to improve retrieval recall.
+
+### Reciprocal Rank Fusion
+
+Dense and sparse retrieval results are combined using **Reciprocal Rank Fusion (RRF)**.
+
+```text
+                User Question
+                      │
+                      ▼
+              Query Expansion
+                      │
+             ┌────────┴────────┐
+             ▼                 ▼
+       Dense Retrieval    Sparse Retrieval
+        pgvector              BM25
+             │                 │
+             └────────┬────────┘
+                      ▼
+                 RRF Ranking
+                      │
+                      ▼
+               Relevant Context
+                      │
+                      ▼
+                 LLM Generation
+                      │
+                      ▼
+              WhatsApp Response
+```
+
+### ⚡ Semantic Caching
+
+Frequently repeated or semantically similar questions are cached using Upstash Redis.
+
+Cache similarity threshold:
+
+```text
+≥ 0.92
+```
+
+This helps reduce:
+
+* LLM API calls
+* Response latency
+* Token consumption
+* Infrastructure costs
+
+### 🔄 Cascading LLM Failover
+
+The primary LLM is:
+
+```text
+Google Gemini 2.5 Flash
+```
+
+If Gemini encounters rate limits or service availability issues (`429` / `503`), the system automatically falls back to:
+
+```text
+Groq
+└── llama-3.3-70b-versatile
+```
+
+If both LLM providers are unavailable, the system can return formatted raw policy chunks instead of failing completely.
+
+---
+
+# 🖥️ Flask Admin Portal
+
+HR administrators can manage the HR system through a web-based dashboard.
+
+### 📊 Dashboard
+
+Provides operational information including:
+
+* Employee headcount
+* Pending leave requests
+* Payroll upload statistics
+* Activity logs
+* System activity
+
+### 👥 Employee Management
+
+Administrators can:
+
+* Add employees
+* Edit employee information
+* Remove employees
+* Search employees
+* View employee leave information
+
+### ✅ Leave Approval
+
+Managers can:
+
+* View leave requests
+* Approve requests
+* Reject requests
+* Trigger WhatsApp notifications to employees
+
+### 💰 Payroll Management
+
+Supports:
+
+* Individual payslip uploads
+* Bulk ZIP uploads
+* PDF encryption
+* S3 storage
+* Background processing
+
+### 📚 Policy Management
+
+Administrators can:
+
+* Upload HR policy PDFs
+* Store policies in AWS S3
+* Extract policy text
+* Split documents into chunks
+* Generate embeddings
+* Store vectors in PostgreSQL
+* Delete policies
+* Invalidate semantic cache
+
+### 🎓 Training Management
+
+Administrators can:
+
+* Upload training videos
+* Assign categories
+* Add descriptions
+* Manage stored videos
+
+---
+
+# 📡 Observability
+
+The system integrates **Langfuse** for AI observability and telemetry.
+
+Tracked information includes:
+
+* Retrieval latency
+* LLM generation latency
+* Token usage
+* Cache hits
+* Generation traces
+* Retrieval information
+* Feedback scores
+* OpenTelemetry-compatible spans
+
+This makes it easier to monitor and debug the RAG pipeline in production.
+
+---
+
+# 🔄 Application Workflow
+
+The complete request lifecycle is:
+
+```text
+Employee
+   │
+   │ WhatsApp Message
+   ▼
+WhatsApp Cloud API
+   │
+   ▼
+Flask /webhook
+   │
+   ▼
+Authentication & Rate Limiting
+   │
+   ▼
+Intent & Session Router
+   │
+   ├───────────────┬────────────────┬─────────────────┐
+   ▼               ▼                ▼                 ▼
+ Leave           Payroll         Training          Policy
+   │               │                │                 │
+   ▼               ▼                ▼                 ▼
+Leave Service   Media Service   Media Service     Hybrid RAG
+   │               │                │                 │
+   ▼               ▼                ▼                 ▼
+PostgreSQL       PostgreSQL       AWS S3        Redis + pgvector
+                                                    │
+                                                    ▼
+                                             BM25 + Dense Search
+                                                    │
+                                                    ▼
+                                                RRF Ranking
+                                                    │
+                                                    ▼
+                                          Gemini / Groq LLM
+                                                    │
+                                                    ▼
+                                              Final Answer
+                                                    │
+                    ┌───────────────────────────────┘
+                    ▼
+             WhatsApp Response
+                    │
+                    ▼
+              Langfuse Trace
+```
+
+---
+
+# 🏗️ System Architecture
 
 ```mermaid
 flowchart TD
-    subgraph Client Layer
+
+    subgraph Client_Layer
         WA[WhatsApp User]
         Admin[HR Admin Browser]
     end
 
-    subgraph Flask Application Gateway
-        WH["/webhook (WhatsApp Cloud API)"]
+    subgraph Flask_Application
+        WH["/webhook"]
         Router[Intent & Session Router]
-        AdminRoutes["/admin Routes (Flask Blueprint)"]
+        AdminRoutes["Admin Routes"]
     end
 
-    subgraph Core Services
+    subgraph Core_Services
         LeaveSvc[Leave Service]
         MediaSvc[Salary & Video Service]
         RAGSvc[Hybrid RAG Engine]
         SyncSvc[Policy Sync Service]
-        Worker[Background Tasks / RQ Worker]
+        Worker[Background Worker]
     end
 
-    subgraph Data & Storage Layer
+    subgraph Data_Storage
         PG[(PostgreSQL + pgvector)]
-        Redis[(Upstash Redis / Cache & Memory)]
-        S3[(AWS S3 Bucket)]
+        Redis[(Upstash Redis)]
+        S3[(AWS S3)]
     end
 
-    subgraph External AI & Telemetry
-        Gemini[Google Gemini 2.5 Flash]
-        Groq[Groq Secondary LLM]
-        Langfuse[Langfuse Observability]
+    subgraph AI_Telemetry
+        Gemini[Gemini 2.5 Flash]
+        Groq[Groq Llama 3.3 70B]
+        Langfuse[Langfuse]
     end
 
-    WA -->|Inbound Message| WH
+    WA --> WH
     WH --> Router
-    Router -->|Leave Action| LeaveSvc
-    Router -->|Salary / Video| MediaSvc
-    Router -->|Policy Query| RAGSvc
+
+    Router --> LeaveSvc
+    Router --> MediaSvc
+    Router --> RAGSvc
 
     Admin --> AdminRoutes
     AdminRoutes --> SyncSvc
@@ -114,85 +385,318 @@ flowchart TD
 
     RAGSvc <--> Redis
     RAGSvc <--> PG
-    RAGSvc -->|Prompt| Gemini
-    Gemini -.->|Failover on 429/503| Groq
-    RAGSvc -->|Log Spans| Langfuse
+
+    RAGSvc --> Gemini
+    Gemini -. Failover 429/503 .-> Groq
+
+    RAGSvc --> Langfuse
 
     SyncSvc --> S3
     SyncSvc --> PG
     SyncSvc --> Redis
+
     Worker --> S3
     Worker --> PG
+```
 
-💻 Tech StackCategoryTechnologyPurposeBackend FrameworkPython 3.11, FlaskApplication routing, webhook receiver, session management, and admin APIFrontend / TemplatesHTML5, Jinja2, CSS3, JavaScriptAdmin dashboard interface, forms, dynamic styling, and componentsDatabasePostgreSQL, pgvectorRelational tables and native vector storage with HNSW cosine indexingDatabase Driverpsycopg2-binaryLow-level connection handling and batch operations (execute_values)Cache & MemoryUpstash RedisFast semantic vector cache ($\ge 0.92$ similarity) and rolling chat historyObject StorageAWS S3 (boto3)Document, payslip, and training video storage with presigned URLsVector EmbeddingsFastEmbed (sentence-transformers/all-MiniLM-L6-v2)Document chunk and query embedding generation (384 dimensions)Sparse Retrievalrank-bm25 (BM25Okapi)In-memory lexical/keyword search across ingested policy documentsPrimary LLMGoogle Gemini 2.5 Flash (google-genai)High-speed response generation, query expansion, and classification fallbackSecondary LLMGroq API (groq)Dynamic high-throughput failover for primary rate limits or outagesPDF Processingpypdf, langchain-communityText extraction, recursive chunking, and AES-128 user password encryptionBackground QueueRedis Queue (rq), Python threadingAsynchronous bulk payslip encryption and PDF vector synchronizationObservabilityLangfuse SDK (v3/v4 OTel)Span tracing, generation tracking, latency monitoring, and token metricsMessaging APIMeta WhatsApp Cloud APIMulti-channel interactive messaging (lists, buttons, documents, video)📁 Project StructurePlaintext.
+---
+
+# 💻 Tech Stack
+
+| Category        | Technology              | Purpose                                |
+| --------------- | ----------------------- | -------------------------------------- |
+| Backend         | Python 3.11             | Application development                |
+| Web Framework   | Flask                   | Web server, webhook, admin portal      |
+| Frontend        | HTML5, CSS3, JavaScript | Admin dashboard                        |
+| Templates       | Jinja2                  | Server-side HTML rendering             |
+| Database        | PostgreSQL              | Application data storage               |
+| Vector Database | pgvector                | Policy embeddings and vector search    |
+| Vector Index    | HNSW                    | Approximate nearest-neighbor search    |
+| Database Driver | psycopg2-binary         | PostgreSQL connectivity                |
+| Embeddings      | FastEmbed               | Document/query embeddings              |
+| Embedding Model | all-MiniLM-L6-v2        | 384-dimensional embeddings             |
+| Sparse Search   | rank-bm25               | Keyword retrieval                      |
+| Cache           | Upstash Redis           | Semantic cache and conversation memory |
+| Queue           | Redis Queue (RQ)        | Background jobs                        |
+| Object Storage  | AWS S3                  | Policies, payslips and training videos |
+| Primary LLM     | Google Gemini 2.5 Flash | Response generation                    |
+| Secondary LLM   | Groq                    | LLM failover                           |
+| PDF Processing  | pypdf                   | PDF processing                         |
+| PDF Encryption  | AES-128                 | Payslip protection                     |
+| Messaging       | Meta WhatsApp Cloud API | Employee communication                 |
+| Observability   | Langfuse                | AI tracing and monitoring              |
+| Telemetry       | OpenTelemetry           | Distributed tracing                    |
+
+---
+
+# 📁 Project Structure
+
+```text
+.
 ├── app/
 │   ├── routes/
-│   │   └── admin_routes.py           # Blueprint for dashboard, employee, leave, salary, and policy management
+│   │   └── admin_routes.py
+│   │
 │   ├── services/
-│   │   ├── auth_service.py           # Admin authentication logic
-│   │   ├── intent_service.py         # Regex, keyword, and Gemini fallback intent classifier
-│   │   ├── leave_service.py          # Multi-turn slot-filling leave application and balance handlers
-│   │   ├── media_service.py          # Salary slips, training videos, and interactive greetings
-│   │   ├── memory_service.py         # Upstash Redis conversation history management
-│   │   ├── policy_sync_service.py    # S3 PDF download, chunking, FastEmbed vectorization, and cache reset
-│   │   ├── rag_service.py            # Hybrid retrieval (pgvector + BM25), Math RRF, and cascading LLM logic
-│   │   ├── s3_service.py             # AWS S3 storage client, presigned URLs, and file operations
-│   │   ├── semantic_cache_service.py # Redis vector similarity caching for policy queries
-│   │   ├── setup_pgvector.py         # Database vector migration and initial S3 indexing script
-│   │   ├── telemetry_service.py      # Centralized Langfuse OpenTelemetry instrumentation
-│   │   └── whatsapp_service.py       # WhatsApp Cloud API helper (text, buttons, lists, media)
+│   │   ├── auth_service.py
+│   │   ├── intent_service.py
+│   │   ├── leave_service.py
+│   │   ├── media_service.py
+│   │   ├── memory_service.py
+│   │   ├── policy_sync_service.py
+│   │   ├── rag_service.py
+│   │   ├── s3_service.py
+│   │   ├── semantic_cache_service.py
+│   │   ├── setup_pgvector.py
+│   │   ├── telemetry_service.py
+│   │   └── whatsapp_service.py
+│   │
 │   ├── tasks/
-│   │   ├── salary_tasks.py           # Bulk payslip ZIP unpack, encryption, S3 upload, and DB save
-│   │   └── worker_tasks.py           # Background workers for heavy workloads
+│   │   ├── salary_tasks.py
+│   │   └── worker_tasks.py
+│   │
 │   └── utils/
-│       └── pdf_security.py           # Password generation and AES-128 PDF stream encryption
+│       └── pdf_security.py
+│
 ├── eval/
-│   ├── benchmark_data.json           # 25-question ground-truth evaluation dataset
-│   └── run_evaluation.py             # Benchmark evaluation suite (Hit Rate, MRR, Faithfulness, Relevancy)
-├── scripts/                          # Utility and maintenance automation scripts
+│   ├── benchmark_data.json
+│   └── run_evaluation.py
+│
+├── scripts/
+│
 ├── static/
 │   ├── css/
-│   │   └── style.css                 # Admin dashboard styling
-│   └── js/                           # Admin frontend interactive scripts
+│   │   └── style.css
+│   └── js/
+│
 ├── templates/
-│   ├── base.html                     # Base template wrapper (Navbar, Sidebar, Flash notifications)
-│   ├── login.html                    # Admin login portal
-│   ├── dashboard.html                # Main metrics overview dashboard
-│   ├── employees.html                # Employee directory listing and search
-│   ├── add_employee.html             # New employee registration form
-│   ├── edit_employee.html            # Update existing employee details
-│   ├── leave_requests.html           # Leave request approvals and history table
-│   ├── upload_salary.html            # Individual and bulk payslip management view
-│   ├── policy_management.html        # PDF policy upload, re-indexing, and deletion view
-│   └── upload_video.html             # Training video upload and cataloging form
-├── config.py                         # Application configuration settings
-├── database.py                       # PostgreSQL initialization, queries, and schema helpers
-├── leave_session.py                  # In-memory dictionary storing active multi-turn leave sessions
-├── main.py                           # Application entry point and WhatsApp webhook server
-├── rate_limiter.py                   # In-memory rate limiting for WhatsApp senders
-├── validators.py                     # Data validation routines (phone numbers, date ranges, leave days)
-├── clear_all_cache.py                # Redis cache invalidation utility
-├── requirements.txt                  # Python dependencies
-└── .env                              # Environment configuration file
-📋 PrerequisitesBefore running the application locally, ensure you have:Python: Version 3.11 or higherPostgreSQL: Version 15+ with the pgvector extension installedRedis: A running local Redis instance (for RQ background workers) and an Upstash Redis REST instance (for semantic caching/memory)Cloud Accounts & API Keys:Meta for Developers Account (WhatsApp Cloud API credentials)Google AI Studio API Key (Gemini 2.5 Flash)Groq Cloud API KeyAWS Account (S3 bucket with read/write credentials)Langfuse Account (Public & Secret API Keys)⚙️ Installation & Setup1. Clone the RepositoryBashgit clone <repository-url>
-cd <project-folder>
-2. Create and Activate a Virtual EnvironmentBash# Using venv
-python -m venv venv
-source venv/bin/activate  # On Windows: .\venv\Scripts\activate
+│   ├── base.html
+│   ├── login.html
+│   ├── dashboard.html
+│   ├── employees.html
+│   ├── add_employee.html
+│   ├── edit_employee.html
+│   ├── leave_requests.html
+│   ├── upload_salary.html
+│   ├── policy_management.html
+│   └── upload_video.html
+│
+├── config.py
+├── database.py
+├── leave_session.py
+├── main.py
+├── rate_limiter.py
+├── validators.py
+├── clear_all_cache.py
+├── requirements.txt
+├── .env.example
+└── README.md
+```
 
-# Or using Conda
-conda create -n hrms python=3.11 -y
-conda activate hrms
-3. Install DependenciesBashpip install -r requirements.txt
-4. Configure Environment VariablesCreate a .env file in the project root:Bashcp .env.example .env
-Populate the configuration values according to the Environment Variables section.5. Initialize the Database & Ingest PoliciesRun the vector initialization script to create required tables, configure the HNSW index, and ingest policy documents from AWS S3:Bashpython app/services/setup_pgvector.py
-🔐 Environment VariablesEnsure all necessary variables are configured inside your .env file:VariableDescriptionExample / DefaultDATABASE_URLPostgreSQL connection string with pgvector supportpostgresql://user:password@localhost:5432/hrms_dbREDIS_URLRedis URL for local RQ background job queueredis://localhost:6379/0UPSTASH_REDIS_REST_URLUpstash Redis REST endpoint for cache and memoryhttps://your-instance.upstash.ioUPSTASH_REDIS_REST_TOKENUpstash Redis REST authentication tokenyour_upstash_tokenGEMINI_API_KEYGoogle Gemini API key for primary RAG generationAIzaSy...GROQ_API_KEYGroq Cloud API key for failover LLM executiongsk_...AWS_ACCESS_KEY_IDAWS IAM Access Key ID with S3 permissionsAKIA...AWS_SECRET_ACCESS_KEYAWS IAM Secret Access Keyyour_aws_secretAWS_REGIONAWS S3 regionap-southeast-2S3_BUCKET_NAMEAWS S3 bucket name for policies, payslips, and videosyour-hrms-bucketS3_POLICY_PREFIXS3 directory prefix where policy PDFs residepolicies/WHATSAPP_TOKENMeta WhatsApp Cloud API access tokenEAAG...PHONE_NUMBER_IDWhatsApp Business Phone Number ID109876543210987VERIFY_TOKENWebhook verification token configured in Meta Appyour_custom_verify_tokenLANGFUSE_PUBLIC_KEYLangfuse public project keypk-lf-...LANGFUSE_SECRET_KEYLangfuse secret project keysk-lf-...LANGFUSE_BASE_URLLangfuse host URLhttps://cloud.langfuse.comSECRET_KEYFlask secret key for admin session managementyour-secure-secret-keyPORTWeb server listening port5000🚀 Running the Application1. Start the Background Worker (Redis Queue)In a dedicated terminal, start the worker to handle asynchronous bulk payroll tasks:Bashrq worker hr_tasks --url redis://localhost:6379/0
-2. Start the Flask ApplicationIn another terminal, start the primary webhook and admin server:Bashpython main.py
-The application will be accessible at:Admin Portal: http://localhost:5000/adminWhatsApp Webhook: http://localhost:5000/webhookHealth Check: http://localhost:5000/health📡 API DocumentationWebhook & Public EndpointsMethodEndpointDescriptionAuth RequiredGET/webhookWhatsApp Cloud API webhook handshake verification (hub.challenge)Verification TokenPOST/webhookInbound WhatsApp message and interactive response receiverNone (Meta Webhook)GET/healthApplication and database connectivity health probeNoneGET/videos/<filename>Serves local video files (if configured)NoneAdmin Portal Endpoints (/admin)MethodEndpointDescriptionAuth RequiredGET/Root route redirecting to login or dashboardNoGET, POST/admin/loginAdmin authentication portalNoGET/admin/logoutTerminates admin sessionYes (Session)GET/adminMain operational analytics dashboardYes (Session)GET/employeesList and search registered employeesYes (Session)GET, POST/add-employeeForm to register a new employeeYes (Session)GET, POST/edit-employee/<id>Modify employee detailsYes (Session)GET/delete-employee/<id>Remove employee and cascade child recordsYes (Session)GET/leave-requestsView leave requests with status filtersYes (Session)GET/approve-leave/<id>Approve leave request and notify employee on WhatsAppYes (Session)GET/reject-leave/<id>Reject leave request and notify employee on WhatsAppYes (Session)GET, POST/upload-salaryUpload and encrypt an individual employee payslipYes (Session)POST/upload-bulk-salaryUpload ZIP archive for background bulk payslip encryptionYes (Session)GET/view-salary/<id>Redirects to an S3 presigned URL for the payslipYes (Session)GET/delete-salary/<id>Deletes payslip record and S3 objectYes (Session)GET, POST/policy-managementUpload policy PDF (dispatches background vector indexing)Yes (Session)GET, POST/delete-policy/<name>Deletes policy from DB, S3, vectors, and invalidates cacheYes (Session)GET/download-policy/<name>Downloads policy PDF via presigned URL attachmentYes (Session)GET/view-policy/<name>Opens policy PDF inline via presigned URLYes (Session)GET, POST/upload-videoUploads training video MP4 to S3 with categoryYes (Session)GET, POST/delete-video/<id>Removes video record and S3 objectYes (Session)🗃️ DatabaseThe application utilizes PostgreSQL with the pgvector extension for storing application metadata and high-dimensional document vectors.Code snippeterDiagram
-    employees ||--o{ leave_requests : "submits"
-    employees ||--o{ salary_slips : "owns"
-    employees ||--o| leave_balance : "maintains"
-    leave_types ||--o{ leave_requests : "categorizes"
+---
+
+# 📋 Prerequisites
+
+Before running the application, install/configure:
+
+* Python 3.11+
+* PostgreSQL 15+
+* PostgreSQL `pgvector` extension
+* Redis
+* AWS account
+* Meta Developer account
+* Google AI Studio API key
+* Groq API key
+* Upstash Redis
+* Langfuse account
+
+---
+
+# ⚙️ Installation
+
+## 1. Clone the Repository
+
+```bash
+git clone <repository-url>
+cd <project-folder>
+```
+
+## 2. Create Virtual Environment
+
+### Windows
+
+```bash
+python -m venv venv
+venv\Scripts\activate
+```
+
+### Linux / macOS
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+## 3. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+## 4. Configure Environment Variables
+
+Create your environment file:
+
+```bash
+cp .env.example .env
+```
+
+On Windows, you can manually copy `.env.example` to `.env`.
+
+Then configure the required credentials.
+
+---
+
+# 🔐 Environment Variables
+
+Create a `.env` file containing the required configuration.
+
+| Variable                   | Description                         |
+| -------------------------- | ----------------------------------- |
+| `DATABASE_URL`             | PostgreSQL connection string        |
+| `REDIS_URL`                | Redis URL used for background jobs  |
+| `UPSTASH_REDIS_REST_URL`   | Upstash Redis REST endpoint         |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis authentication token  |
+| `GEMINI_API_KEY`           | Google Gemini API key               |
+| `GROQ_API_KEY`             | Groq API key                        |
+| `AWS_ACCESS_KEY_ID`        | AWS access key                      |
+| `AWS_SECRET_ACCESS_KEY`    | AWS secret access key               |
+| `AWS_REGION`               | AWS region                          |
+| `S3_BUCKET_NAME`           | S3 bucket name                      |
+| `S3_POLICY_PREFIX`         | S3 policy directory                 |
+| `WHATSAPP_TOKEN`           | WhatsApp Cloud API token            |
+| `PHONE_NUMBER_ID`          | WhatsApp Business phone number ID   |
+| `VERIFY_TOKEN`             | WhatsApp webhook verification token |
+| `LANGFUSE_PUBLIC_KEY`      | Langfuse public key                 |
+| `LANGFUSE_SECRET_KEY`      | Langfuse secret key                 |
+| `LANGFUSE_BASE_URL`        | Langfuse server URL                 |
+| `SECRET_KEY`               | Flask session secret                |
+| `PORT`                     | Application port                    |
+
+> ⚠️ **Never commit ****`.env`**** or any real credentials to GitHub.**
+
+Add the following to `.gitignore`:
+
+```gitignore
+.env
+venv/
+__pycache__/
+*.pyc
+```
+
+---
+
+# 🗃️ Database Setup
+
+The application uses PostgreSQL with the `pgvector` extension.
+
+Initialize the vector database and policy index:
+
+```bash
+python app/services/setup_pgvector.py
+```
+
+This prepares the vector infrastructure and indexes policy documents.
+
+---
+
+# 🚀 Running the Application
+
+## 1. Start Redis
+
+Make sure Redis is running locally.
+
+## 2. Start the RQ Worker
+
+Open a separate terminal:
+
+```bash
+rq worker hr_tasks --url redis://localhost:6379/0
+```
+
+## 3. Start Flask
+
+Open another terminal:
+
+```bash
+python main.py
+```
+
+The application will then be available at:
+
+```text
+Admin Portal:
+http://localhost:5000/admin
+
+Webhook:
+http://localhost:5000/webhook
+
+Health Check:
+http://localhost:5000/health
+```
+
+---
+
+# 📡 API Documentation
+
+## Webhook & Public Endpoints
+
+| Method | Endpoint             | Description                      | Authentication     |
+| ------ | -------------------- | -------------------------------- | ------------------ |
+| GET    | `/webhook`           | WhatsApp webhook verification    | Verification Token |
+| POST   | `/webhook`           | Receives WhatsApp messages       | Meta Webhook       |
+| GET    | `/health`            | Health check                     | None               |
+| GET    | `/videos/<filename>` | Serves video files if configured | None               |
+
+---
+
+## Admin Endpoints
+
+| Method   | Endpoint                  | Description           |
+| -------- | ------------------------- | --------------------- |
+| GET/POST | `/admin/login`            | Admin authentication  |
+| GET      | `/admin/logout`           | Logout                |
+| GET      | `/admin`                  | Dashboard             |
+| GET      | `/employees`              | Employee directory    |
+| GET/POST | `/add-employee`           | Add employee          |
+| GET/POST | `/edit-employee/<id>`     | Edit employee         |
+| GET      | `/delete-employee/<id>`   | Delete employee       |
+| GET      | `/leave-requests`         | View leave requests   |
+| GET      | `/approve-leave/<id>`     | Approve leave         |
+| GET      | `/reject-leave/<id>`      | Reject leave          |
+| GET/POST | `/upload-salary`          | Upload payslip        |
+| POST     | `/upload-bulk-salary`     | Bulk payslip upload   |
+| GET      | `/view-salary/<id>`       | View payslip          |
+| GET      | `/delete-salary/<id>`     | Delete payslip        |
+| GET/POST | `/policy-management`      | Manage policies       |
+| GET      | `/download-policy/<name>` | Download policy       |
+| GET      | `/view-policy/<name>`     | View policy           |
+| GET/POST | `/upload-video`           | Upload training video |
+| GET/POST | `/delete-video/<id>`      | Delete training video |
+
+---
+
+# 🗄️ Database Schema
+
+The main entities include:
+
+```mermaid
+erDiagram
+
+    employees ||--o{ leave_requests : submits
+    employees ||--o{ salary_slips : owns
+    employees ||--o| leave_balance : maintains
+    leave_types ||--o{ leave_requests : categorizes
 
     employees {
         varchar employee_id PK
@@ -209,7 +713,7 @@ The application will be accessible at:Admin Portal: http://localhost:5000/adminW
     }
 
     leave_balance {
-        varchar employee_id PK, FK
+        varchar employee_id PK
         integer casual
         integer sick
         integer earned
@@ -221,7 +725,7 @@ The application will be accessible at:Admin Portal: http://localhost:5000/adminW
         varchar from_date
         varchar to_date
         integer leave_days
-        varchar leave_type FK
+        varchar leave_type
         text reason
         varchar category
         varchar priority
@@ -268,10 +772,413 @@ The application will be accessible at:Admin Portal: http://localhost:5000/adminW
         text activity
         timestamp created_at
     }
-🔒 Authentication & AuthorizationAdmin Portal Authentication: Protected via session-based authentication. Unauthenticated requests to protected /admin or management routes trigger redirects to /admin/login.WhatsApp User Authentication: Zero-friction phone identity validation against the registered employees database table. Unregistered phone numbers receive an access denial message.Document Security: Salary slip PDFs are encrypted using AES-128 user encryption before being stored in AWS S3 or dispatched. Passwords follow the format: <EMPLOYEE_ID>@<LAST_4_DIGITS_OF_PHONE>.🖼️ Screenshots / DemoAdmin Login(Placeholder: screenshots/login.png)Operational Dashboard(Placeholder: screenshots/dashboard.png)Employee Directory(Placeholder: screenshots/employees.png)Leave Approvals(Placeholder: screenshots/leave_requests.png)🧪 Testing & EvaluationThe repository includes a standalone automated evaluation suite configured to benchmark retrieval and generation performance using a 25-question ground-truth dataset.Run the evaluation suite:Bashpython eval/run_evaluation.py
-Metrics Assessed:Hit Rate @ 5: Proportion of queries where the ground-truth policy chunk is retrieved in the top 5 candidates.Mean Reciprocal Rank (MRR): Measures the ranking position of the primary relevant document.Faithfulness Score (0.0 to 1.0): LLM Judge evaluation assessing whether the generated response is strictly grounded in the retrieved context.Answer Relevancy (0.0 to 1.0): Measures how directly and completely the response answers the employee's query.🛡️ Error Handling & SecurityCascading Failover: Automatic fallback from Gemini 2.5 Flash to Groq (llama-3.3-70b-versatile) when encountering 429 (Quota Exceeded) or 503 (Service Unavailable) status codes.Raw Chunk Fallback: Formats and returns bulleted policy excerpts if all LLM APIs experience an outage.Rate Limiting: Enforces in-memory request thresholds per sender number to prevent abuse.Duplicate Webhook Suppression: In-memory caching of processed WhatsApp message IDs within a 60-second sliding window to avoid processing retries twice.Input Sanitization: Parameterized SQL queries using psycopg2 across all database handlers to prevent SQL injection vulnerabilities.⚡ Performance & ScalabilitySemantic Caching: Vector similarity matching ($\ge 0.92$) via Upstash Redis reduces LLM generation costs and yields response times under 500ms for repeated or semantically equivalent questions.HNSW Indexing: Hierarchical Navigable Small World graphs enable rapid approximate nearest neighbor vector searches across policy embeddings.Asynchronous Offloading: CPU-intensive workloads (PDF chunking, vector embedding, bulk AES-128 encryption) are offloaded to Redis Queue (RQ) workers or daemon threads, ensuring instant HTTP 200 responses to webhooks and admin users.🚀 DeploymentThe project can be deployed to containerized and cloud platforms:Web Service (Render / Railway / AWS EC2): Run the Flask application via Gunicorn:Bashgunicorn -w 4 -b 0.0.0.0:5000 main:app
-Background Worker Service: Deploy a separate worker container executing:Bashrq worker hr_tasks --url $REDIS_URL
-Managed Databases: PostgreSQL with pgvector hosted on Neon, Supabase, or AWS RDS.File Storage: AWS S3 configured with private bucket policies and IAM credentials.🔮 Future Improvements[ ] Add multi-language translation support for WhatsApp responses.[ ] Implement OAuth2 / Google Workspace SSO for admin portal login.[ ] Integrate automated WhatsApp template broadcasts for company-wide policy updates.[ ] Support voice note queries via speech-to-text processing.⚠️ Known LimitationsActive leave sessions are stored in an in-memory dictionary (leave_session.py), which resets if the server restarts during a multi-turn conversation.Rate limiter counters are kept in memory and do not persist across multi-instance horizontal deployments unless shifted to Redis.🤝 ContributingFork the repository.Create a feature branch:Bashgit checkout -b feature/YourFeature
-Commit your changes:Bashgit commit -m "Add your feature description"
-Push to the branch:Bashgit push origin feature/YourFeature
-Open a Pull Request.📄 LicenseLicense: Not specified👤 AuthorAuthor: [Your Name]🙏 AcknowledgementsMeta WhatsApp Cloud APIpgvectorFastEmbed by QdrantGoogle GenAI SDKGroq CloudLangfuseUpstash Redis🏷️ GitHub Repository Topicswhatsapp-chatbot, rag, pgvector, hybrid-search, bm25, gemini-api, groq, langfuse, flask, hrms, semantic-cache, fastembed, redis-queue, opentelemetry
+```
+
+---
+
+# 🔒 Authentication & Security
+
+## Admin Authentication
+
+The Admin Portal uses session-based authentication.
+
+Unauthenticated users attempting to access protected routes are redirected to:
+
+```text
+/admin/login
+```
+
+## WhatsApp User Authentication
+
+Employees are identified using their registered WhatsApp phone number.
+
+The system verifies the phone number against the employee database before allowing access to HR functionality.
+
+## Payslip Security
+
+Payslip PDFs are encrypted before being stored or delivered.
+
+Password format:
+
+```text
+<EMPLOYEE_ID>@<LAST_4_DIGITS_OF_PHONE>
+```
+
+## Additional Security Measures
+
+The system includes:
+
+* Parameterized PostgreSQL queries
+* Environment-based secrets
+* Rate limiting
+* Duplicate webhook suppression
+* Protected admin routes
+* Private S3 storage
+* Presigned URLs for secure file access
+* PDF encryption
+
+---
+
+# 🧪 Testing & Evaluation
+
+The project includes an evaluation framework for measuring the RAG system.
+
+Evaluation dataset:
+
+```text
+25 ground-truth questions
+```
+
+Run the evaluation:
+
+```bash
+python eval/run_evaluation.py
+```
+
+## Evaluation Metrics
+
+### Hit Rate @ 5
+
+Measures whether the correct policy chunk appears within the top five retrieved results.
+
+### Mean Reciprocal Rank
+
+Measures how highly the relevant document appears in the retrieval results.
+
+### Faithfulness
+
+Measures whether the generated answer is grounded in the retrieved context.
+
+### Answer Relevancy
+
+Measures how effectively the generated answer addresses the user's question.
+
+---
+
+# 🛡️ Error Handling
+
+The application includes several fallback mechanisms.
+
+## LLM Failover
+
+```text
+Gemini
+   │
+   │ 429 / 503
+   ▼
+Groq
+   │
+   │ Failure
+   ▼
+Raw Retrieved Policy Chunks
+```
+
+## Rate Limiting
+
+Requests are rate-limited per WhatsApp sender to reduce abuse.
+
+## Duplicate Webhooks
+
+WhatsApp webhook message IDs are temporarily cached to prevent duplicate processing.
+
+## Input Validation
+
+User input is validated before processing.
+
+Database queries use parameterized SQL through `psycopg2`.
+
+---
+
+# ⚡ Performance & Scalability
+
+### Semantic Caching
+
+Semantically similar queries can be served from Redis without invoking an LLM.
+
+Configured similarity threshold:
+
+```text
+0.92
+```
+
+### HNSW Vector Search
+
+HNSW indexing enables efficient approximate nearest-neighbor searches across policy embeddings.
+
+### Background Processing
+
+Heavy operations are moved to background workers, including:
+
+* Bulk payslip encryption
+* ZIP processing
+* PDF processing
+* Policy ingestion
+* Embedding generation
+
+This prevents long-running operations from blocking the main web application.
+
+---
+
+# 📈 Scalability Considerations
+
+For production environments, the application can be extended by:
+
+* Moving conversation sessions from memory to Redis
+* Moving rate limiting to Redis
+* Running multiple Flask instances
+* Running dedicated RQ worker instances
+* Using managed PostgreSQL
+* Using private S3 buckets
+* Adding centralized logging
+* Adding container orchestration
+
+---
+
+# 🚀 Deployment
+
+The Flask application can be deployed using Gunicorn.
+
+```bash
+gunicorn -w 4 -b 0.0.0.0:5000 main:app
+```
+
+The RQ worker can run separately:
+
+```bash
+rq worker hr_tasks --url $REDIS_URL
+```
+
+### Recommended Production Components
+
+```text
+                    Internet
+                       │
+                       ▼
+                Reverse Proxy
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+        Flask Instances     RQ Workers
+              │                 │
+              └────────┬────────┘
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+   PostgreSQL       Redis            AWS S3
+    + pgvector
+        │
+        ▼
+  Policy Vectors
+```
+
+Possible infrastructure options include:
+
+* Render
+* Railway
+* AWS EC2
+* Neon
+* Supabase
+* AWS RDS
+* AWS S3
+
+---
+
+# 🖼️ Screenshots
+
+Add screenshots to the repository under:
+
+```text
+screenshots/
+```
+
+Recommended screenshots:
+
+### Admin Login
+
+```markdown
+![Admin Login](screenshots/login.png)
+```
+
+### Dashboard
+
+```markdown
+![Dashboard](screenshots/dashboard.png)
+```
+
+### Employee Management
+
+```markdown
+![Employee Directory](screenshots/employees.png)
+```
+
+### Leave Approval
+
+```markdown
+![Leave Requests](screenshots/leave_requests.png)
+```
+
+---
+
+# 🔮 Future Improvements
+
+The following features can be added in future versions:
+
+* [ ] Multi-language WhatsApp responses
+* [ ] OAuth2 / Google Workspace SSO
+* [ ] Automated WhatsApp policy broadcasts
+* [ ] Voice-note support with speech-to-text
+* [ ] Redis-based distributed session management
+* [ ] Distributed rate limiting
+* [ ] Advanced HR analytics
+* [ ] Role-based admin permissions
+* [ ] Automated policy update notifications
+
+---
+
+# ⚠️ Known Limitations
+
+### In-Memory Leave Sessions
+
+Active multi-turn leave sessions are currently stored in memory.
+
+```text
+leave_session.py
+```
+
+Therefore, active sessions may be lost if the application restarts.
+
+### In-Memory Rate Limiting
+
+Rate limiter state is stored in memory and does not automatically synchronize across multiple application instances.
+
+For horizontal scaling, these components should be moved to Redis.
+
+---
+
+# 🤝 Contributing
+
+Contributions are welcome.
+
+## 1. Fork the Repository
+
+Create your own fork of the project.
+
+## 2. Create a Feature Branch
+
+```bash
+git checkout -b feature/your-feature
+```
+
+## 3. Make Your Changes
+
+Implement and test your changes.
+
+## 4. Commit
+
+```bash
+git add .
+git commit -m "Add your feature description"
+```
+
+## 5. Push
+
+```bash
+git push origin feature/your-feature
+```
+
+## 6. Open a Pull Request
+
+Create a Pull Request with a clear description of your changes.
+
+---
+
+# 📄 License
+
+License: **Not specified**
+
+---
+
+# 👤 Author
+
+**[Your Name]**
+
+---
+
+# 🙏 Acknowledgements
+
+This project uses and builds upon several excellent technologies and open-source projects:
+
+* Meta WhatsApp Cloud API
+* PostgreSQL
+* pgvector
+* FastEmbed
+* BM25
+* Google Gemini
+* Groq
+* AWS S3
+* Upstash Redis
+* Redis Queue
+* Flask
+* Langfuse
+* OpenTelemetry
+
+---
+
+# 🏷️ GitHub Topics
+
+```text
+whatsapp-chatbot
+ai-assistant
+rag
+hybrid-search
+pgvector
+bm25
+semantic-search
+gemini
+groq
+flask
+hrms
+human-resources
+semantic-cache
+fastembed
+redis
+redis-queue
+aws-s3
+langfuse
+opentelemetry
+python
+```
+
+---
+
+# ⭐ Project Summary
+
+**Enterprise AI HR Assistant** combines conversational AI, WhatsApp, Hybrid RAG, PostgreSQL/pgvector, Redis, AWS S3, and Langfuse to provide a secure and scalable HR self-service platform.
+
+The system enables employees to access HR information and services through a familiar WhatsApp interface while giving HR teams centralized control through a dedicated administration portal.
+
+```text
+WhatsApp
+    │
+    ▼
+AI HR Assistant
+    │
+    ├── HR Policy Q&A
+    ├── Leave Management
+    ├── Leave Balance
+    ├── Payslip Access
+    └── Training Videos
+    │
+    ▼
+Hybrid RAG + Enterprise Data
+    │
+    ├── PostgreSQL + pgvector
+    ├── BM25
+    ├── Upstash Redis
+    ├── AWS S3
+    ├── Gemini
+    ├── Groq
+    └── Langfuse
+```
+
+**Built with Python, Flask, PostgreSQL, pgvector, Redis, AWS S3, Gemini, Groq, and Langfuse.**
